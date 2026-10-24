@@ -18,7 +18,7 @@ genre (bandit) → story source → story editor → storyboard → voice + word
 4. **Voice & timing (`ttsEngine.ts`, `sceneTiming.ts`)** — Microsoft Edge neural TTS (free) with word timings; the voice matches the narrator's gender; every scene is aligned to the exact word where it starts.
 5. **Visuals (`src/visuals/`)** — pluggable providers, see below. Character reference sheets are generated first and attached to every scene they appear in.
 6. **Render (`videoComposer.ts`)** — per-scene pan/zoom on stills (or AI clips), hard cuts on the narration, karaoke captions with a rotating highlight colour, a hook overlay on the first frame, voice + ducked music + SFX.
-7. **Publish (`publisher.ts`)** — YouTube (with the synthetic-content disclosure flag and configurable privacy), Instagram Reels, Facebook Reels; descriptions carry the credit line and sources.
+7. **Publish (`publisher.ts`)** — one call per Platform, each returning its Post's ID and link or its error: YouTube (with the synthetic-content disclosure flag and configurable privacy), Instagram Reels, Facebook Reels; descriptions carry the credit line and sources.
 8. **Learning loop (`analyticsLoop.ts`)** — pulls retention/shares/views and lets Gemini re-weight genres, hook types and rules weekly.
 
 ## Visual providers
@@ -47,7 +47,7 @@ A Gemini video costs about **$0.30 (≈ ₹30 with GST)**: ~$0.27-0.34 for image
 - **Shot reuse:** the storyboard marks lines that continue the same moment (`sameShotAsPrevious`); they reuse the previous image with a different camera move, so ~11 scenes need ~7-9 images.
 - **Cheap text:** the story editor runs on `GEMINI_EDITOR_MODEL` (flash-lite) and thinking is kept `low` (thinking tokens bill as output).
 - **No motion clips by default** (`MOTION_PROVIDER=none`); `MOTION_CLIPS_PER_VIDEO=1` animates only the hook.
-- **Daily budget:** every paid call is logged to the `spend_log` table and checked against `DAILY_BUDGET_USD` (default $0.50). When paid images would exceed it, the run switches to ComfyUI if `IMAGE_FALLBACK=comfyui`, otherwise it skips the video rather than publishing a stock-footage one. Each run ends with `API spend for this video: $… (≈ ₹… incl. tax)`.
+- **Daily budget:** every paid call is logged to the `spend_log` table, against the run it was made in, and checked against `DAILY_BUDGET_USD` (default $0.50). When paid images would exceed it, the run switches to ComfyUI if `IMAGE_FALLBACK=comfyui`, otherwise it skips the video rather than publishing a stock-footage one. Each run ends with `API spend for this video: $… (≈ ₹… incl. tax)`.
 - **Free iteration:** `--storyboard <run>/storyboard.json --reuse-visuals <run>` re-renders a video (new voice, captions, audio) without paying for images again.
 - **$0 visuals:** run ComfyUI on a GPU PC (`IMAGE_PROVIDER=comfyui`) and keep Gemini as the fallback.
 
@@ -83,7 +83,7 @@ npm run daemon
 
 Per-run flags: `--genre <id>`, `--images <gemini|comfyui|fal|stock>`, `--motion <none|gemini|fal|comfyui>`, `--storyboard-only`, `--storyboard <path>` (re-render a saved storyboard), `--reuse-visuals <run folder>` (reuse its images), `--no-upload`.
 
-Each run writes `storyboard.json`, `timing.json`, the scene images, voice, captions and `<run>_final.mp4` to `output/<run>/`.
+Each run writes `storyboard.json`, `timing.json`, the scene images, voice, captions, `<run>_final.mp4` and `run.log` (everything the run printed) to `output/<run>/`. The flags apply to that run only.
 
 `npm run daemon` runs the generate, metrics and evolve schedules and serves the dashboard at http://localhost:4747 (`DASHBOARD_PORT`). It listens on this machine only and has no login; to open it from another device, reach it over Tailscale and add that host name to `DASHBOARD_ALLOWED_HOSTS`.
 

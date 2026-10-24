@@ -38,14 +38,16 @@ export interface VisualsResult {
  *    a different camera move. Each shot is retried once, then IMAGE_FALLBACK is used,
  * 3. optional AI motion clips for the hook (MOTION_PROVIDER, MOTION_CLIPS_PER_VIDEO).
  * Paid providers are skipped when they would push today's spend past DAILY_BUDGET_USD.
+ * `providers` are this Run's image and motion Providers.
  */
 export async function generateSceneMedia(
   storyboard: Storyboard,
   scenes: TimedScene[],
-  runDir: string
+  runDir: string,
+  providers: { image: ImageProviderName; motion: MotionProviderName }
 ): Promise<VisualsResult> {
-  let primary = IMAGE_PROVIDERS[CONFIG.visuals.imageProvider];
-  if (!primary) throw new Error(`Unknown IMAGE_PROVIDER "${CONFIG.visuals.imageProvider}"`);
+  let primary = IMAGE_PROVIDERS[providers.image];
+  if (!primary) throw new Error(`Unknown image provider "${providers.image}"`);
   const fallback =
     CONFIG.visuals.imageFallback !== 'none' && CONFIG.visuals.imageFallback !== primary.name
       ? IMAGE_PROVIDERS[CONFIG.visuals.imageFallback]
@@ -168,9 +170,9 @@ export async function generateSceneMedia(
   }
   const media = fillGaps(results);
 
-  if (CONFIG.visuals.motionProvider !== 'none') {
-    const motion = MOTION_PROVIDERS[CONFIG.visuals.motionProvider];
-    if (!motion) throw new Error(`Unknown MOTION_PROVIDER "${CONFIG.visuals.motionProvider}"`);
+  if (providers.motion !== 'none') {
+    const motion = MOTION_PROVIDERS[providers.motion];
+    if (!motion) throw new Error(`Unknown motion provider "${providers.motion}"`);
     const flagged = scenes.filter((s) => s.motionCandidate);
     const targets = (flagged.length > 0 ? flagged : scenes.slice(0, 1)).slice(0, CONFIG.visuals.motionClipsPerVideo);
 

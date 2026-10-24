@@ -17,7 +17,9 @@ function initSchema(database: DatabaseSync): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       item TEXT NOT NULL,
       usd REAL NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now')),
+      -- The Run it was spent in; missing for spend outside a Run, and for spend from before Runs.
+      run_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS videos (
@@ -67,4 +69,10 @@ function initSchema(database: DatabaseSync): void {
       created_at TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  const spendColumns = database.prepare('PRAGMA table_info(spend_log)').all() as { name: string }[];
+  if (!spendColumns.some((column) => column.name === 'run_id')) {
+    database.exec('ALTER TABLE spend_log ADD COLUMN run_id TEXT');
+  }
+  database.exec('CREATE INDEX IF NOT EXISTS spend_log_run ON spend_log(run_id)');
 }

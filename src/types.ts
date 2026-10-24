@@ -1,3 +1,5 @@
+import type { ImageProviderName, MotionProviderName } from './loadConfig.js';
+
 export type SourceKind = 'reddit' | 'wikipedia' | 'fiction';
 
 export type NicheCategory =
@@ -141,9 +143,44 @@ export interface WordTiming {
   endMs: number;
 }
 
-export interface PlatformUploadResult {
-  youtubeVideoId?: string;
-  instagramMediaId?: string;
-  facebookVideoId?: string;
-  errors: string[];
+/** What one Run is asked to do. Each Run gets its own, so nothing carries over to the next. */
+export interface RunOptions {
+  /** Force a Genre instead of letting the strategy pick. */
+  genre?: NicheCategory;
+  /** The image Provider for this Run; IMAGE_PROVIDER when unset. */
+  imageProvider?: ImageProviderName;
+  /** The motion Provider for this Run; MOTION_PROVIDER when unset. */
+  motionProvider?: MotionProviderName;
+  /** Stop after writing the Storyboard (no voice, visuals or render). */
+  storyboardOnly?: boolean;
+  /** Set false to skip publishing even when ENABLE_AUTO_UPLOAD=true. */
+  upload?: boolean;
+  /** Re-render: reuse an earlier Run's storyboard.json instead of finding a new Story. */
+  storyboardPath?: string;
+  /** Re-render: reuse the scene visuals in an earlier Run's folder instead of paying for them again. */
+  reuseVisualsDir?: string;
+}
+
+/** How the Pipeline tells its caller where a Run has got to. */
+export interface RunProgress {
+  /** Step `step` of 7 has started. */
+  step(step: number, message: string): void;
+  /** The Run's output folder now exists. */
+  folder(dir: string): void;
+}
+
+/** What the Pipeline made of a Run: a Storyboard and, unless the Run was storyboard only, a Video. */
+export interface PipelineResult {
+  story: StoryBrief;
+  storyboard: Storyboard;
+  /** The strategy version the Run was made under. */
+  strategyVersion: number;
+  video?: RenderedVideo;
+}
+
+/** The final MP4 a Run rendered, with the voice it was read in. */
+export interface RenderedVideo {
+  path: string;
+  durationSec: number;
+  voiceName: string;
 }

@@ -2,45 +2,39 @@ import fs from 'fs';
 import { google } from 'googleapis';
 import { request } from 'undici';
 import { CONFIG } from '../config.js';
-import { Storyboard, PlatformUploadResult } from '../types.js';
+import { isConfigured, Platform, PublishResult, VideoToPublish } from '../platforms.js';
+import { Storyboard } from '../types.js';
+
+const CREDENTIAL_KEYS: Record<Platform, string> = {
+  youtube: 'set YOUTUBE_CLIENT_ID and YOUTUBE_REFRESH_TOKEN',
+  instagram: 'set META_ACCESS_TOKEN and INSTAGRAM_BUSINESS_ACCOUNT_ID',
+  facebook: 'set META_ACCESS_TOKEN and FACEBOOK_PAGE_ID',
+};
+
+/** A Post that went out: the Platform's ID for it, and its link. */
+type Published = { id: string; url?: string };
+
+const PUBLISHERS: Record<Platform, (mp4Path: string, script: Storyboard) => Promise<Published>> = {
+  youtube: uploadToYouTubeShorts,
+  instagram: uploadToInstagramReels,
+  facebook: uploadToFacebookReels,
+};
 
 /**
- * Publishes the rendered vertical MP4 concurrently to:
- * 1. YouTube Shorts (via YouTube Data API v3)
- * 2. Instagram Reels (Graph API resumable upload)
- * 3. Facebook Page Reels (Graph API video_reels binary upload)
+ * Publishes the rendered vertical MP4 to one Platform, returning the Post's ID and link or the
+ * error (it never throws):
+ * - YouTube Shorts (via YouTube Data API v3)
+ * - Instagram Reels (Graph API resumable upload)
+ * - Facebook Page Reels (Graph API video_reels binary upload)
  */
-export async function publishAcrossPlatforms(
-  mp4Path: string,
-  script: Storyboard
-): Promise<PlatformUploadResult> {
-  const result: PlatformUploadResult = { errors: [] };
-
-  const tasks = await Promise.allSettled([
-    uploadToYouTubeShorts(mp4Path, script),
-    uploadToInstagramReels(mp4Path, script),
-    uploadToFacebookReels(mp4Path, script),
-  ]);
-
-  if (tasks[0].status === 'fulfilled' && tasks[0].value) {
-    result.youtubeVideoId = tasks[0].value;
-  } else if (tasks[0].status === 'rejected') {
-    result.errors.push(`YouTube: ${tasks[0].reason}`);
+export async function publishToPlatform(platform: Platform, video: VideoToPublish): Promise<PublishResult> {
+  try {
+    if (!isConfigured(platform, CONFIG)) throw new Error(`Not configured: ${CREDENTIAL_KEYS[platform]}.`);
+    const { id, url } = await PUBLISHERS[platform](video.path, video.storyboard);
+    return { platform, ok: true, id, url };
+  } catch (err) {
+    return { platform, ok: false, error: (err as Error).message || String(err) };
   }
-
-  if (tasks[1].status === 'fulfilled' && tasks[1].value) {
-    result.instagramMediaId = tasks[1].value;
-  } else if (tasks[1].status === 'rejected') {
-    result.errors.push(`Instagram: ${tasks[1].reason}`);
-  }
-
-  if (tasks[2].status === 'fulfilled' && tasks[2].value) {
-    result.facebookVideoId = tasks[2].value;
-  } else if (tasks[2].status === 'rejected') {
-    result.errors.push(`Facebook: ${tasks[2].reason}`);
-  }
-
-  return result;
 }
 
 /** Appends the credit line and source links that every platform description carries. */
@@ -52,17 +46,7 @@ function withCredits(text: string, script: Storyboard): string {
 async function uploadToYouTubeShorts(
   mp4Path: string,
   script: Storyboard
-): Promise<string | undefined> {
-  if (
-    !CONFIG.youtube.clientId ||
-    !CONFIG.youtube.refreshToken ||
-    CONFIG.youtube.clientId.includes('your_') ||
-    CONFIG.youtube.refreshToken.includes('your_')
-  ) {
-    console.log('[Publisher] Skipping YouTube upload (credentials not configured).');
-    return undefined;
-  }
-
+): Promise<Published> {
   const oauth2Client = new google.auth.OAuth2(
     CONFIG.youtube.clientId,
     CONFIG.youtube.clientSecret
@@ -96,7 +80,10 @@ async function uploadToYouTubeShorts(
     },
   });
 
-  return res.data.id || undefined;
+  if (!res.data.id) {
+    throw new Error(`YouTube upload returned no video ID: ${JSON.stringify(res.data)}`);
+  }
+  return { id: res.data.id, url: `https://youtube.com/shorts/${res.data.id}` };
 }
 
 /**
@@ -106,12 +93,8 @@ async function uploadToYouTubeShorts(
 async function uploadToInstagramReels(
   mp4Path: string,
   script: Storyboard
-): Promise<string | undefined> {
+): Promise<Published> {
   const { accessToken, igBusinessId, graphVersion } = CONFIG.meta;
-  if (!accessToken || !igBusinessId || accessToken.includes('your_') || igBusinessId.includes('your_')) {
-    console.log('[Publisher] Skipping Instagram Reels (META_ACCESS_TOKEN or INSTAGRAM_BUSINESS_ACCOUNT_ID not configured).');
-    return undefined;
-  }
   const graph = `https://graph.facebook.com/${graphVersion}`;
 
   const createRes = await request(`${graph}/${igBusinessId}/media`, {
@@ -185,23 +168,18 @@ async function uploadToInstagramReels(
     }).catch(() => {});
   }
 
-  return pubData.id;
+  // The Reel is live by now, so a failed link lookup must not turn it into a failed Post.
+  const permalink = await request(`${graph}/${pubData.id}?fields=permalink&access_token=${accessToken}`)
+    .then(async (res) => ((await res.body.json()) as any).permalink as string | undefined)
+    .catch(() => undefined);
+  return { id: pubData.id, url: permalink };
 }
 
 async function uploadToFacebookReels(
   mp4Path: string,
   script: Storyboard
-): Promise<string | undefined> {
+): Promise<Published> {
   const { accessToken, fbPageId, graphVersion } = CONFIG.meta;
-  if (
-    !accessToken ||
-    !fbPageId ||
-    accessToken.includes('your_') ||
-    fbPageId.includes('your_')
-  ) {
-    console.log('[Publisher] Skipping Facebook Reels (META_ACCESS_TOKEN or FACEBOOK_PAGE_ID not configured).');
-    return undefined;
-  }
 
   const startUrl = `https://graph.facebook.com/${graphVersion}/${fbPageId}/video_reels`;
   const startRes = await request(startUrl, {
@@ -250,5 +228,5 @@ async function uploadToFacebookReels(
     throw new Error(`FB Reels publish failed: ${JSON.stringify(finishData)}`);
   }
 
-  return startData.video_id;
+  return { id: startData.video_id, url: `https://www.facebook.com/reel/${startData.video_id}` };
 }
