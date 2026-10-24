@@ -16,7 +16,7 @@ const DASHBOARD = 'localhost:4747';
  * fake adapters, and tears it all down when the test finishes. `env` is written to `.env` and
  * the config is built from it; `envExample`, when given, is written to `.env.example`.
  * `slotOptions` stands in for the flags `pnpm daemon` was started with, and `alertRules` are
- * checked along with the Daemon's own.
+ * checked along with the Daemon's own. The Daemon runs under pm2 unless `underPm2` is false.
  */
 export function startTestDaemon(opts: {
   now: Date;
@@ -24,6 +24,7 @@ export function startTestDaemon(opts: {
   envExample?: string;
   slotOptions?: RunOptions;
   alertRules?: AlertRule[];
+  underPm2?: boolean;
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fvp-daemon-'));
   let stopDaemon = async () => {};
@@ -45,7 +46,7 @@ export function startTestDaemon(opts: {
 
   const config = loadConfig(opts.env ?? {}, root);
   const clock = new FakeClock(opts.now);
-  const { adapters, calls, failures, pipelineSpend } = fakeAdapters(clock, config);
+  const { adapters, calls, failures, pipelineSpend } = fakeAdapters(clock, config, { underPm2: opts.underPm2 });
   const startDaemon = (env: Record<string, string>) => {
     const started = createDaemon(loadConfig(env, root), adapters, {
       slotOptions: opts.slotOptions,
@@ -62,6 +63,9 @@ export function startTestDaemon(opts: {
     const headers = { host: DASHBOARD, ...init.headers };
     return daemon.app.request(`http://${headers.host}${pathname}`, { method: init.method, headers });
   };
+  /** Posts an action, as a form on the dashboard's own page does. */
+  const post = (pathname: string) =>
+    request(pathname, { method: 'POST', headers: { origin: `http://${DASHBOARD}` } });
 
   return {
     /** The dashboard's routes; add one only before the first request. */
@@ -72,6 +76,7 @@ export function startTestDaemon(opts: {
     generate: (options: RunOptions) => daemon.generate(options),
     failures,
     pipelineSpend,
+    post,
     request,
     writeEnv,
     /** Stops the Daemon and starts a new one on the same folders, clock and fakes, with `env` as its `.env`. */
@@ -103,6 +108,11 @@ function visibleText(html: string): string {
     .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/g, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/g, ' ')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
     .replace(/\s+/g, ' ')
     .trim();
 }

@@ -9,7 +9,7 @@ import { createAlerts, type AlertRule } from './alerts.js';
 import { every, type Clock } from './clock.js';
 import { generate } from './generate.js';
 import { missingEnvKeysRule } from './missingEnvKeys.js';
-import { frontPage } from './pages.js';
+import { frontPage, RESTART_NEEDS_PM2, restartingPage } from './pages.js';
 import { protect } from './protect.js';
 import { nextDue, startSchedule, type ScheduledTask } from './schedule.js';
 
@@ -29,6 +29,13 @@ export interface Adapters {
   notifier: { send(push: Push): Promise<void> };
   /** Pings the heartbeat service (healthchecks.io), which pushes when the pings stop. */
   heartbeat: { ping(url: string): Promise<void> };
+  /** pm2, which keeps the daemon running and starts it again whenever it exits. */
+  processControl: {
+    /** Whether exiting would bring the daemon back: only when pm2 runs this process. */
+    canRestart(): boolean;
+    /** Exits, for pm2 to start the daemon again. Called once the Daemon has stopped. */
+    restart(): void;
+  };
 }
 
 export interface Daemon {
@@ -74,13 +81,40 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   app.get('/', (c) => {
     const now = clock.now();
     const nextUp = tasks.map((task) => ({ name: task.name, due: nextDue(task.expression, now) }));
-    return c.html(frontPage({ now, startedAt, nextUp, alerts: alerts.active() }));
+    const canRestart = adapters.processControl.canRestart();
+    return c.html(frontPage({ now, startedAt, nextUp, alerts: alerts.active(), canRestart }));
+  });
+  app.post('/actions/restart', (c) => {
+    if (!adapters.processControl.canRestart()) return c.text(RESTART_NEEDS_PM2, 409);
+    console.log('[Daemon] Restart asked from the dashboard: stopping, for pm2 to start it again.');
+    // Answer first; the Daemon stops and exits on the clock's next turn. It exits even if
+    // stopping failed, so pm2 still brings it back.
+    clock.setTimeout(() => {
+      stop()
+        .catch((err) => console.error(`[Daemon] Stopping failed: ${(err as Error).message || String(err)}`))
+        .then(() => adapters.processControl.restart());
+    }, 0);
+    return c.html(restartingPage());
   });
 
   let stopSchedule = () => {};
   let stopAlertChecks = () => {};
   let stopHeartbeat = () => {};
   let server: ServerType | undefined;
+  let stopped: Promise<void> | undefined;
+
+  /** Stops everything the Daemon started; stopping again waits for the first stop. */
+  function stop(): Promise<void> {
+    stopped ??= (async () => {
+      stopSchedule();
+      stopAlertChecks();
+      stopHeartbeat();
+      await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
+      await alerts.idle();
+      database.close();
+    })();
+    return stopped;
+  }
 
   return {
     app,
@@ -102,13 +136,6 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
       });
     },
     generate: run,
-    async stop() {
-      stopSchedule();
-      stopAlertChecks();
-      stopHeartbeat();
-      await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
-      await alerts.idle();
-      database.close();
-    },
+    stop,
   };
 }

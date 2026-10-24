@@ -87,6 +87,8 @@ Each run writes `storyboard.json`, `timing.json`, the scene images, voice, capti
 
 `npm run daemon` runs the generate, metrics and evolve schedules and serves the dashboard at http://localhost:4747 (`DASHBOARD_PORT`). It listens on this machine only and has no login; to open it from another device, reach it over Tailscale and add that host name to `DASHBOARD_ALLOWED_HOSTS`.
 
+To run it all day, start it with pm2 instead: `pm2 start ecosystem.config.cjs`. pm2 starts it again after a crash, and the dashboard's **Restart** button works only under pm2. **[docs/DAEMON_SETUP.md](docs/DAEMON_SETUP.md)** covers pm2 on macOS and Windows, starting it when you log in, keeping the PC awake, Tailscale, ntfy and healthchecks.io.
+
 Problems become **Alerts**: they show at the top of the dashboard while active and are pushed to your phone through [ntfy](https://ntfy.sh) (`NTFY_TOPIC`) when they start and when they clear. Pushes are held during Quiet hours (`QUIET_HOURS`, default 23:00-08:00) and sent as one push when they end. Set `HEALTHCHECK_URL` to a [healthchecks.io](https://healthchecks.io) check and the daemon pings it every 5 minutes; point that check at the same ntfy topic to hear when the PC or the daemon stops. An Alert also lists keys `.env.example` has that your `.env` lacks, or leaves empty where `.env.example` fills them in.
 
 `npm test` runs the tests (Vitest); `npm run typecheck` checks types.

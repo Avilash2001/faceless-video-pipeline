@@ -49,6 +49,12 @@ const adapters: Adapters = {
   },
   notifier: { send: (push) => sendToNtfy(CONFIG.alerts, push) },
   heartbeat: { ping: pingHealthcheck },
+  processControl: {
+    // pm2 sets pm_id in the environment of every process it runs.
+    canRestart: () => process.env.pm_id !== undefined,
+    // pm2 starts the daemon again whenever it exits, so exiting is the restart.
+    restart: () => process.exit(0),
+  },
 };
 
 async function main() {

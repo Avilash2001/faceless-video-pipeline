@@ -11,9 +11,11 @@ export interface FrontPage {
   nextUp: { name: string; due: Date }[];
   /** Active Alerts, oldest first; shown above everything else. */
   alerts: ActiveAlert[];
+  /** Whether pm2 runs the daemon, so Restart would bring it back. */
+  canRestart: boolean;
 }
 
-export function frontPage({ now, startedAt, nextUp, alerts }: FrontPage): Html {
+export function frontPage({ now, startedAt, nextUp, alerts, canRestart }: FrontPage): Html {
   return layout(
     'Dashboard',
     html`
@@ -32,6 +34,10 @@ export function frontPage({ now, startedAt, nextUp, alerts }: FrontPage): Html {
           <dt>Daemon</dt>
           <dd><strong class="up">Up</strong> since ${localTime(startedAt)}</dd>
         </dl>
+        <form method="post" action="/actions/restart">
+          <button ${canRestart ? '' : 'disabled'}>Restart</button>
+        </form>
+        ${canRestart ? '' : html`<p class="muted">${RESTART_NEEDS_PM2}</p>`}
       </section>
       <section>
         <h2>Next up</h2>
@@ -47,12 +53,36 @@ export function frontPage({ now, startedAt, nextUp, alerts }: FrontPage): Html {
   );
 }
 
-function layout(title: string, body: Html): Html {
+/** Why Restart is off when the daemon wasn't started by pm2. */
+export const RESTART_NEEDS_PM2 =
+  "Restart is off: pm2 isn't running the daemon, so nothing would start it again. " +
+  'Start it with "pm2 start ecosystem.config.cjs" (see docs/DAEMON_SETUP.md).';
+
+/**
+ * Shown while pm2 restarts the daemon; goes back to the front page once it should be up again. Its
+ * address becomes the front page's at once, so reloading it doesn't post the restart again.
+ */
+export function restartingPage(): Html {
+  return layout(
+    'Restarting',
+    html`<section>
+      <h2>Restarting</h2>
+      <p>The daemon is stopping, and pm2 will start it again. This page goes back to the dashboard in a few seconds.</p>
+    </section>`,
+    html`<meta http-equiv="refresh" content="5; url=/" />
+      <script>
+        history.replaceState(null, '', '/');
+      </script>`
+  );
+}
+
+function layout(title: string, body: Html, head: Html | '' = ''): Html {
   return html`<!doctype html>
     <html lang="en">
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        ${head}
         <title>${title} · Faceless Video Pipeline</title>
         <style>
           ${raw(CSS)}
@@ -85,8 +115,12 @@ const CSS = `
   ul { margin: 0; padding-left: 1.25rem; }
   .alerts { border-color: var(--alert); }
   .alerts h2 { color: var(--alert); }
+  form { margin: 0.75rem 0 0; }
+  button { font: inherit; min-height: 2.75rem; padding: 0.5rem 1.25rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
   .up { color: var(--ok); }
   .muted { color: var(--muted); }
+  section p { margin: 0.5rem 0 0; }
 `;
 
 /** A time on the page, written as `formatLocalTime` writes it. */

@@ -8,8 +8,11 @@ import type { PipelineResult, Push, RunOptions, RunProgress } from '../../src/ty
 import type { FakeClock } from './fakeClock.js';
 import { fakeStory, fakeStoryboard } from './fakeStory.js';
 
-/** Adapters that record when each was called instead of leaving the process. */
-export function fakeAdapters(clock: FakeClock, config: Config) {
+/**
+ * Adapters that record when each was called instead of leaving the process. `underPm2` is whether
+ * pm2 runs the fake daemon, so a Restart would bring it back.
+ */
+export function fakeAdapters(clock: FakeClock, config: Config, { underPm2 = true } = {}) {
   const calls = {
     pipeline: [] as Date[],
     pipelineOptions: [] as RunOptions[],
@@ -19,6 +22,8 @@ export function fakeAdapters(clock: FakeClock, config: Config) {
     /** Pushes that reached the phone; a failed push isn't one. */
     pushes: [] as ({ at: Date } & Push)[],
     heartbeat: [] as { at: Date; url: string }[],
+    /** Each time the Daemon asked Process control to restart it. */
+    restarts: [] as Date[],
   };
   /** Set one to make that adapter fail with it until it is cleared. */
   const failures: {
@@ -95,6 +100,12 @@ export function fakeAdapters(clock: FakeClock, config: Config) {
       ping: async (url) => {
         if (failures.heartbeat) throw new Error(failures.heartbeat);
         calls.heartbeat.push({ at: clock.now(), url });
+      },
+    },
+    processControl: {
+      canRestart: () => underPm2,
+      restart: () => {
+        calls.restarts.push(clock.now());
       },
     },
   };
