@@ -91,6 +91,8 @@ To run it all day, start it with pm2 instead: `pm2 start ecosystem.config.cjs`. 
 
 Problems become **Alerts**: they show at the top of the dashboard while active and are pushed to your phone through [ntfy](https://ntfy.sh) (`NTFY_TOPIC`) when they start and when they clear. Pushes are held during Quiet hours (`QUIET_HOURS`, default 23:00-08:00) and sent as one push when they end. Set `HEALTHCHECK_URL` to a [healthchecks.io](https://healthchecks.io) check and the daemon pings it every 5 minutes; point that check at the same ntfy topic to hear when the PC or the daemon stops. An Alert also lists keys `.env.example` has that your `.env` lacks, or leaves empty where `.env.example` fills them in.
 
+The dashboard's **Strategy** page shows the current `data/strategy_rules.json` (Genre and hook weights, rules, voices) and every evolve, newest first, with the critic's summary and how each weight changed from the version before. A Genre that still has a weight but is no longer in `src/genres.ts` is labelled retired.
+
 `npm test` runs the tests (Vitest); `npm run typecheck` checks types.
 
 To create the YouTube, Instagram and Facebook accounts and fill in the publishing keys, follow **[docs/CHANNEL_SETUP.md](docs/CHANNEL_SETUP.md)**.

@@ -1,15 +1,18 @@
 import { serve, type ServerType } from '@hono/node-server';
+import fs from 'fs';
 import { Hono } from 'hono';
 import type { AddressInfo } from 'net';
+import path from 'path';
 import { openDatabase } from '../db/open.js';
+import { evolveHistory } from '../db/strategyHistory.js';
 import type { Config } from '../loadConfig.js';
 import type { Platform, PublishResult, VideoToPublish } from '../platforms.js';
-import type { PipelineResult, Push, RunOptions, RunProgress } from '../types.js';
+import type { PipelineResult, Push, RunOptions, RunProgress, StrategyRules } from '../types.js';
 import { createAlerts, type AlertRule } from './alerts.js';
 import { every, type Clock } from './clock.js';
 import { generate } from './generate.js';
 import { missingEnvKeysRule } from './missingEnvKeys.js';
-import { frontPage, RESTART_NEEDS_PM2, restartingPage } from './pages.js';
+import { frontPage, RESTART_NEEDS_PM2, restartingPage, strategyPage, type StrategyPage } from './pages.js';
 import { protect } from './protect.js';
 import { nextDue, startSchedule, type ScheduledTask } from './schedule.js';
 
@@ -84,6 +87,16 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
     const canRestart = adapters.processControl.canRestart();
     return c.html(frontPage({ now, startedAt, nextUp, alerts: alerts.active(), canRestart }));
   });
+  app.get('/strategy', (c) => {
+    const { root, strategyFile } = config.paths;
+    return c.html(
+      strategyPage({
+        strategyFile: path.relative(root, strategyFile),
+        strategy: readStrategy(strategyFile),
+        evolves: evolveHistory(database),
+      })
+    );
+  });
   app.post('/actions/restart', (c) => {
     if (!adapters.processControl.canRestart()) return c.text(RESTART_NEEDS_PM2, 409);
     console.log('[Daemon] Restart asked from the dashboard: stopping, for pm2 to start it again.');
@@ -138,4 +151,13 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
     generate: run,
     stop,
   };
+}
+
+/** The strategy evolve and the Pipeline read, or why it can't be read. */
+function readStrategy(file: string): StrategyPage['strategy'] {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf-8')) as StrategyRules;
+  } catch (err) {
+    return { error: (err as Error).message || String(err) };
+  }
 }

@@ -4,6 +4,7 @@ import { Type } from '@google/genai';
 import { request } from 'undici';
 import { CONFIG } from '../config.js';
 import { db } from '../db/index.js';
+import { recordEvolve } from '../db/strategyHistory.js';
 import { StrategyRules } from '../types.js';
 import { generateContentWithFallback } from './gemini.js';
 
@@ -195,9 +196,12 @@ TASK:
     'utf-8'
   );
 
-  db.prepare(
-    `INSERT INTO strategy_history (version, rules_json, critic_summary) VALUES (?, ?, ?)`
-  ).run(nextRules.version, JSON.stringify(nextRules), mutated.criticSummary || '');
+  recordEvolve(db, {
+    from: currentRules,
+    to: nextRules,
+    criticSummary: mutated.criticSummary || '',
+    at: new Date(nextRules.updatedAt),
+  });
 
   console.log(`[AnalyticsLoop] Evolved strategy to v${nextRules.version}: ${mutated.criticSummary}`);
   return nextRules;

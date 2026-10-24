@@ -4,8 +4,10 @@ import path from 'path';
 import { onTestFinished } from 'vitest';
 import type { AlertRule } from '../../src/daemon/alerts.js';
 import { createDaemon } from '../../src/daemon/index.js';
+import { openDatabase } from '../../src/db/open.js';
+import { recordEvolve } from '../../src/db/strategyHistory.js';
 import { loadConfig } from '../../src/loadConfig.js';
-import type { RunOptions } from '../../src/types.js';
+import type { RunOptions, StrategyRules } from '../../src/types.js';
 import { fakeAdapters } from './fakeAdapters.js';
 import { FakeClock } from './fakeClock.js';
 
@@ -17,6 +19,7 @@ const DASHBOARD = 'localhost:4747';
  * the config is built from it; `envExample`, when given, is written to `.env.example`.
  * `slotOptions` stands in for the flags `pnpm daemon` was started with, and `alertRules` are
  * checked along with the Daemon's own. The Daemon runs under pm2 unless `underPm2` is false.
+ * `strategy`, when given, is written to the strategy file.
  */
 export function startTestDaemon(opts: {
   now: Date;
@@ -25,6 +28,7 @@ export function startTestDaemon(opts: {
   slotOptions?: RunOptions;
   alertRules?: AlertRule[];
   underPm2?: boolean;
+  strategy?: StrategyRules;
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fvp-daemon-'));
   let stopDaemon = async () => {};
@@ -45,6 +49,11 @@ export function startTestDaemon(opts: {
   if (opts.envExample !== undefined) fs.writeFileSync(path.join(root, '.env.example'), opts.envExample);
 
   const config = loadConfig(opts.env ?? {}, root);
+  const writeStrategy = (strategy: StrategyRules) => {
+    fs.mkdirSync(path.dirname(config.paths.strategyFile), { recursive: true });
+    fs.writeFileSync(config.paths.strategyFile, JSON.stringify(strategy, null, 2));
+  };
+  if (opts.strategy) writeStrategy(opts.strategy);
   const clock = new FakeClock(opts.now);
   const { adapters, calls, failures, pipelineSpend } = fakeAdapters(clock, config, { underPm2: opts.underPm2 });
   const startDaemon = (env: Record<string, string>) => {
@@ -84,6 +93,20 @@ export function startTestDaemon(opts: {
       await stopDaemon();
       writeEnv(env);
       daemon = startDaemon(env);
+    },
+    /**
+     * Does what evolve does once Gemini has answered: writes `strategy` to the strategy file and
+     * records it as an evolve, at `at`, from the strategy that was there.
+     */
+    recordEvolve(strategy: StrategyRules, criticSummary: string, at: Date) {
+      const from = JSON.parse(fs.readFileSync(config.paths.strategyFile, 'utf-8')) as StrategyRules;
+      writeStrategy(strategy);
+      const database = openDatabase(config.paths.dbFile);
+      try {
+        recordEvolve(database, { from, to: strategy, criticSummary, at });
+      } finally {
+        database.close();
+      }
     },
     /** The run.log in each Run's folder, oldest Run first. */
     runLogs(): string[] {

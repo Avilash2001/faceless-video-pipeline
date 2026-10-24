@@ -61,12 +61,15 @@ function initSchema(database: DatabaseSync): void {
       UNIQUE(video_id, snapshot_date)
     );
 
+    -- One row per evolve that changed the strategy.
     CREATE TABLE IF NOT EXISTS strategy_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       version INTEGER NOT NULL,
       rules_json TEXT NOT NULL,
       critic_summary TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now')),
+      -- The strategy the evolve started from; missing on evolves recorded before it was kept.
+      previous_rules_json TEXT
     );
 
     -- One row each time a condition starts; times are the Daemon's clock, as ISO strings.
@@ -97,9 +100,16 @@ function initSchema(database: DatabaseSync): void {
     );
   `);
 
-  const spendColumns = database.prepare('PRAGMA table_info(spend_log)').all() as { name: string }[];
-  if (!spendColumns.some((column) => column.name === 'run_id')) {
-    database.exec('ALTER TABLE spend_log ADD COLUMN run_id TEXT');
-  }
+  addColumnIfMissing(database, 'spend_log', 'run_id TEXT');
   database.exec('CREATE INDEX IF NOT EXISTS spend_log_run ON spend_log(run_id)');
+  addColumnIfMissing(database, 'strategy_history', 'previous_rules_json TEXT');
+}
+
+/** Adds a column a table made before it existed lacks; `definition` is its name, then its type. */
+function addColumnIfMissing(database: DatabaseSync, table: string, definition: string): void {
+  const name = definition.split(' ')[0];
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some((column) => column.name === name)) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  }
 }
