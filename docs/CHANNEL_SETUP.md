@@ -177,7 +177,7 @@ YouTube's official advice: start with a test upload, then keep "a posting schedu
 
 1. Days 1–2: finish Parts A–E. Post one video by hand per platform and confirm it's public when viewed logged out.
 2. Day 2: run the pipeline once with `YOUTUBE_PRIVACY=private` and check all three platforms.
-3. Days 3–7: post 1 video a day at a fixed time. Move to 2 a day (the current cron) once quality holds. Both are far below every API limit.
+3. Days 3–7: post 1 video a day at a fixed time (the default `CRON_GENERATE_SCHEDULE=0 18 * * *`). Move to 2 a day once quality holds. Both are far below every API limit.
 4. Watch retention daily (Studio → Analytics, Instagram insights). The weekly `evolve` job waits for 4 or more scored videos.
 5. Review every story yourself (hook, title, source credit). That review is your protection against the inauthentic and unoriginal content rules.
 

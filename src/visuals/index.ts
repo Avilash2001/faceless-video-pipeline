@@ -10,7 +10,7 @@ import { stockProvider } from './images/stock.js';
 import { comfyMotionProvider } from './motion/comfyui.js';
 import { falMotionProvider } from './motion/fal.js';
 import { geminiMotionProvider } from './motion/gemini.js';
-import { castSheetPrompt, sceneCharacters, scenePrompt } from './prompts.js';
+import { castSheetPrompt, imageSafe, sceneCharacters, scenePrompt } from './prompts.js';
 import { ImageJob, ImageProvider, MotionProvider } from './types.js';
 
 const IMAGE_PROVIDERS: Record<ImageProviderName, ImageProvider> = {
@@ -145,6 +145,14 @@ export async function generateSceneMedia(
     shotResults.set(scene.index, null);
   });
 
+  // A video made of two images repeated eleven times is worse than no video.
+  const generated = shots.filter((s) => shotResults.get(s.index)).length;
+  if (generated / shots.length < 0.7) {
+    throw new Error(
+      `Only ${generated} of ${shots.length} shots could be generated; skipping this video instead of reusing a few images everywhere.`
+    );
+  }
+
   const results: (SceneMedia | null)[] = [];
   for (const scene of scenes) {
     if (shotResults.has(scene.index)) {
@@ -178,7 +186,7 @@ export async function generateSceneMedia(
       try {
         const clip = await motion.animate({
           imagePath: still.path,
-          prompt: scene.motionPrompt || 'Slow cinematic camera push-in with subtle natural movement.',
+          prompt: imageSafe(scene.motionPrompt || 'Slow cinematic camera push-in with subtle natural movement.', storyboard),
           seconds,
           seed: baseSeed + 1000 + scene.index,
           outBase: path.join(dir, `motion_${String(scene.index).padStart(2, '0')}`),

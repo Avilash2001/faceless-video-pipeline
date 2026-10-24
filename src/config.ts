@@ -106,7 +106,8 @@ export const CONFIG = {
     graphVersion: process.env.META_GRAPH_VERSION || 'v26.0',
   },
   schedule: {
-    generate: process.env.CRON_GENERATE_SCHEDULE || '0 8,18 * * *',
+    /** One video a day by default. */
+    generate: process.env.CRON_GENERATE_SCHEDULE || '0 18 * * *',
     metrics: process.env.CRON_METRICS_SCHEDULE || '0 2 * * *',
     evolve: process.env.CRON_EVOLVE_SCHEDULE || '0 4 * * 0',
     enableAutoUpload: process.env.ENABLE_AUTO_UPLOAD === 'true',

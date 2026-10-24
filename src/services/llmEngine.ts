@@ -62,9 +62,10 @@ NARRATION:
 VISUALS (art style "${styleName}": ${VISUAL_STYLES[styleName]}):
 - "visualPrompt": a concrete single frame showing exactly what that line describes: subject + action + setting + shot type + lighting + mood, with the subject in the upper two-thirds (captions sit at the bottom). Don't restate the art style or aspect ratio; they're added automatically.
 - Refer to recurring people ONLY by their character id (e.g. "C1 slams the door") and list them in "characterIds"; their appearance is injected automatically.
+- NEVER write a real person's name (or any name) in "visualPrompt" or "motionPrompt": image models refuse named real people. Use character ids or generic descriptions ("a famous striker").
 - Never ask for text, letters, signs, logos, watermarks or UI in the image.
 - ${isFiction || genre.source === 'reddit' ? 'Characters are invented people.' : 'Real people are depicted as stylized illustrations, never photorealistic likenesses.'}
-- "characters": 1-3 recurring people with a fixed visual description (age, build, hair, skin tone, clothing, one distinctive detail).
+- "characters": 1-3 recurring people with a fixed visual description (age, build, hair, skin tone, clothing, one distinctive detail) and a "role": a short generic label with no name (e.g. "the young footballer", "the HOA president").
 - "sameShotAsPrevious": true when a line continues the exact same moment and place as the previous scene, so its image is reused with a different camera move. Aim for 7-9 distinct images in total. Never true for scene 1, the reversal, or the final payoff.
 - "camera": vary it; use push_in for tension, pull_out for reveals, pans for movement. A reused shot must use a different camera move than the scene before it.
 - "sfx": whoosh on a location or time jump, impact on the reversal, riser just before the twist, otherwise none.
@@ -103,10 +104,11 @@ Ending: ${brief.ending}`;
           type: Type.ARRAY,
           items: {
             type: Type.OBJECT,
-            required: ['id', 'name', 'appearance'],
+            required: ['id', 'name', 'role', 'appearance'],
             properties: {
               id: { type: Type.STRING, description: 'C1, C2, C3' },
               name: { type: Type.STRING },
+              role: { type: Type.STRING, description: 'Generic label without any name, e.g. "the young footballer"' },
               appearance: { type: Type.STRING },
             },
           },

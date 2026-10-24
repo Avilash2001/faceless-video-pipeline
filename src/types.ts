@@ -73,6 +73,8 @@ export interface StoryBrief {
 export interface CharacterSpec {
   id: string;
   name: string;
+  /** Generic, name-free label for image prompts ("the young footballer"); image models refuse real names. */
+  role: string;
   /** Fixed visual description reused in every image prompt for consistency. */
   appearance: string;
 }

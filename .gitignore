@@ -14,3 +14,7 @@ assets/cache/*
 # Generated music library (npm run make-music); copy the folder between machines instead
 assets/music/*
 !assets/music/.gitkeep
+
+# SQLite write-ahead log files
+data/*.sqlite-shm
+data/*.sqlite-wal
