@@ -7,3 +7,6 @@ output/*
 # Downloaded stock B-roll cache (keep the folder itself)
 assets/cache/*
 !assets/cache/.gitkeep
+
+# macOS Finder metadata
+.DS_Store
