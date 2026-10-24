@@ -84,6 +84,8 @@ export interface StoryScene {
   /** 2-4 word stock-footage query, used only when generation falls back to stock. */
   stockQuery: string;
   characterIds: string[];
+  /** Reuse the previous scene's image (same moment/place) with a different camera move. */
+  sameShotAsPrevious: boolean;
   camera: CameraMove;
   sfx: SfxCue;
   /** True for the 1-2 scenes worth animating with an AI video clip (hook, climax). */

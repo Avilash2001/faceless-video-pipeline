@@ -24,17 +24,32 @@ export const CONFIG = {
   },
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
-    model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
+    /** Writes the storyboard (the creative step). */
+    model: process.env.GEMINI_MODEL || 'gemini-3.8-flash',
+    /** Picks and briefs the story; a cheaper model is plenty here. */
+    editorModel: process.env.GEMINI_EDITOR_MODEL || 'gemini-3.1-flash-lite',
+    /** minimal | low | medium | high. Thinking tokens are billed as output. */
+    thinking: (process.env.GEMINI_THINKING || 'low').toUpperCase(),
     imageModel: process.env.GEMINI_IMAGE_MODEL || 'gemini-nano-banana-2.1',
-    /** 1K | 2K | 4K. 2K leaves headroom for pan/zoom above 1080x1920. */
-    imageSize: process.env.GEMINI_IMAGE_SIZE || '2K',
+    /** 1K ($0.034) | 2K ($0.050) | 4K. 1K is upscaled for pan/zoom; 2K is sharper. */
+    imageSize: process.env.GEMINI_IMAGE_SIZE || '1K',
     videoModel: process.env.GEMINI_VIDEO_MODEL || 'gemini-omni-1.1-flash',
+    musicModel: process.env.GEMINI_MUSIC_MODEL || 'lyria-3.5',
+  },
+  costs: {
+    /** Hard cap on paid API spend per UTC day; paid providers are skipped beyond it. */
+    dailyBudgetUsd: Number(process.env.DAILY_BUDGET_USD || 0.5),
+    /** Display only: converts logged USD estimates to INR including GST. */
+    usdToInr: Number(process.env.USD_TO_INR || 88),
+    taxMultiplier: Number(process.env.COST_TAX_MULTIPLIER || 1.18),
   },
   visuals: {
     imageProvider: (process.env.IMAGE_PROVIDER || 'gemini') as ImageProviderName,
-    imageFallback: (process.env.IMAGE_FALLBACK || 'stock') as ImageProviderName,
+    /** Per-scene fallback; 'none' reuses a neighbouring scene's image instead (keeps one art style). */
+    imageFallback: (process.env.IMAGE_FALLBACK || 'none') as ImageProviderName | 'none',
     motionProvider: (process.env.MOTION_PROVIDER || 'none') as MotionProviderName,
-    motionClipsPerVideo: Number(process.env.MOTION_CLIPS_PER_VIDEO || 2),
+    /** 1 = hook only (the scene that decides whether people keep watching). */
+    motionClipsPerVideo: Number(process.env.MOTION_CLIPS_PER_VIDEO || 1),
     concurrency: Number(process.env.IMAGE_CONCURRENCY || 3),
   },
   comfyui: {
@@ -87,7 +102,8 @@ export const CONFIG = {
     accessToken: process.env.META_ACCESS_TOKEN || '',
     igBusinessId: process.env.INSTAGRAM_BUSINESS_ACCOUNT_ID || '',
     fbPageId: process.env.FACEBOOK_PAGE_ID || '',
-    publicVideoBaseUrl: process.env.PUBLIC_VIDEO_BASE_URL || '',
+    /** Meta Graph API version for Instagram and Facebook calls (v21.0 expires Jan 2027). */
+    graphVersion: process.env.META_GRAPH_VERSION || 'v26.0',
   },
   schedule: {
     generate: process.env.CRON_GENERATE_SCHEDULE || '0 8,18 * * *',

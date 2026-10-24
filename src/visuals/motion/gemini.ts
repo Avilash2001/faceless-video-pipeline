@@ -7,6 +7,7 @@ import { MotionJob, MotionProvider } from '../types.js';
 export const geminiMotionProvider: MotionProvider = {
   name: 'gemini',
   costPerSecondUsd: 0.1,
+  billedSeconds: (seconds) => Math.round(seconds),
   async animate(job: MotionJob): Promise<string> {
     const mime = /\.jpe?g$/i.test(job.imagePath) ? 'image/jpeg' : 'image/png';
     const interaction = await ai.interactions.create({

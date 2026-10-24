@@ -10,6 +10,8 @@
     "sync-metrics": "node --import tsx src/index.ts --sync-metrics",
     "evolve": "node --import tsx src/index.ts --evolve",
     "daemon": "node --import tsx src/index.ts --daemon",
+    "make-sfx": "node --import tsx src/tools/makeSfx.ts",
+    "make-music": "node --import tsx src/tools/makeMusic.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

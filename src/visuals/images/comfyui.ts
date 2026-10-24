@@ -13,15 +13,16 @@ export const comfyImageProvider: ImageProvider = {
   supportsRefs: fs.existsSync(resolveWorkflowPath(CONFIG.comfyui.imageEditWorkflow)),
   async generate(job: ImageJob): Promise<GeneratedMedia> {
     const useEdit = job.refImages.length > 0 && this.supportsRefs;
-    const square = job.aspectRatio === '1:1';
+    const { imageWidth: w, imageHeight: h } = CONFIG.comfyui;
+    const size = { '9:16': [w, h], '1:1': [w, w], '16:9': [h, w] }[job.aspectRatio];
     const { data, ext } = await runComfyWorkflow(
       useEdit ? CONFIG.comfyui.imageEditWorkflow : CONFIG.comfyui.imageWorkflow,
       {
         prompt: job.prompt,
         negative: 'text, letters, watermark, logo, blurry, deformed hands, extra fingers',
         seed: job.seed,
-        width: CONFIG.comfyui.imageWidth,
-        height: square ? CONFIG.comfyui.imageWidth : CONFIG.comfyui.imageHeight,
+        width: size[0],
+        height: size[1],
         images: useEdit ? job.refImages : [],
       },
       'image'

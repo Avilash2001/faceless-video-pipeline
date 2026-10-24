@@ -25,7 +25,7 @@ genre (bandit) → story source → story editor → storyboard → voice + word
 
 | `IMAGE_PROVIDER` | What | Cost per video (~11 images) | Needs |
 |---|---|---|---|
-| `gemini` | Nano Banana 2.1, 2K 9:16, character references | ~$0.55 | Billing enabled on the Gemini API key (free tier allows 0 images) |
+| `gemini` | Nano Banana 2.1, 1K 9:16, one shared cast sheet for references | ~$0.27-0.34 | Billing enabled on the Gemini API key (free tier allows 0 images) |
 | `comfyui` | Local ComfyUI, e.g. FLUX.2 klein 4B | $0 | A running ComfyUI server + exported workflows |
 | `fal` | fal.ai Seedream 5 Lite (+ edit endpoint for references) | ~$0.40 | `FAL_KEY` |
 | `stock` | Pixabay/Pexels clips | $0 | Optional `PIXABAY_API_KEY`; generic footage |
@@ -33,11 +33,25 @@ genre (bandit) → story source → story editor → storyboard → voice + word
 | `MOTION_PROVIDER` | What | Cost (2 clips, hook + climax) | Needs |
 |---|---|---|---|
 | `none` | Pan/zoom only | $0 | — |
-| `gemini` | Gemini Omni Flash image-to-video | ~$1.00 | Gemini billing |
+| `gemini` | Gemini Omni Flash image-to-video | ~$0.40 per clip | Gemini billing |
 | `fal` | Kling 2.5 Turbo image-to-video | ~$0.42 | `FAL_KEY` |
 | `comfyui` | Wan 2.2 I2V (+ 4-step LoRA) | $0 (minutes per clip on a 3060) | ComfyUI video workflow |
 
-`IMAGE_FALLBACK` (default `stock`) is used per scene when the primary provider fails twice.
+When a scene fails twice, `IMAGE_FALLBACK` decides what happens: `none` (default) reuses a neighbouring scene's image with a different camera move so the art style stays consistent; `comfyui`, `fal` or `stock` generate it elsewhere.
+
+## Costs
+
+A Gemini video costs about **$0.30 (≈ ₹30 with GST)**: ~$0.27-0.34 for images plus ~$0.01 of text. How it's kept low:
+- **1K images** ($0.034 each); the composer upscales them for pan/zoom. Set `GEMINI_IMAGE_SIZE=2K` for sharper frames at $0.050.
+- **One cast sheet** per video instead of one per character, attached as the reference for every scene with people.
+- **Shot reuse:** the storyboard marks lines that continue the same moment (`sameShotAsPrevious`); they reuse the previous image with a different camera move, so ~11 scenes need ~7-9 images.
+- **Cheap text:** the story editor runs on `GEMINI_EDITOR_MODEL` (flash-lite) and thinking is kept `low` (thinking tokens bill as output).
+- **No motion clips by default** (`MOTION_PROVIDER=none`); `MOTION_CLIPS_PER_VIDEO=1` animates only the hook.
+- **Daily budget:** every paid call is logged to the `spend_log` table and checked against `DAILY_BUDGET_USD` (default $0.50). When paid images would exceed it, the run switches to ComfyUI if `IMAGE_FALLBACK=comfyui`, otherwise it skips the video rather than publishing a stock-footage one. Each run ends with `API spend for this video: $… (≈ ₹… incl. tax)`.
+- **Free iteration:** `--storyboard <run>/storyboard.json --reuse-visuals <run>` re-renders a video (new voice, captions, audio) without paying for images again.
+- **$0 visuals:** run ComfyUI on a GPU PC (`IMAGE_PROVIDER=comfyui`) and keep Gemini as the fallback.
+
+Google also enforces a monthly spending cap on the AI Studio project; if it's reached, every Gemini call (text included) fails until you raise it.
 
 ## Quick start
 
@@ -50,19 +64,28 @@ npm install
 # 2. Configure
 cp .env.example .env
 
-# 3. Preview a story without spending anything on images or rendering
+# 3. One-time audio setup: synthesized SFX (free, already in the repo) and a Lyria music
+#    library (~$0.48 once for six moods; copy assets/music/ to other machines)
+npm run make-sfx
+npm run make-music
+
+# 4. Preview a story without spending anything on images or rendering
 npm run generate -- --genre true_heists_cons --storyboard-only
 
-# 4. Make a video (saved under output/<run>/, not uploaded)
+# 5. Make a video (saved under output/<run>/, not uploaded)
 npm run generate -- --genre fiction_confessions --images gemini --no-upload
 
-# 5. Analytics + weekly strategy evolution, or run everything on a schedule
+# 6. Analytics + weekly strategy evolution, or run everything on a schedule
 npm run sync-metrics
 npm run evolve
 npm run daemon
 ```
 
-Per-run flags: `--genre <id>`, `--images <gemini|comfyui|fal|stock>`, `--motion <none|gemini|fal|comfyui>`, `--storyboard-only`, `--no-upload`. Each run writes `storyboard.json`, `timing.json`, the scene images, voice, captions and `<run>_final.mp4` to `output/<run>/`.
+Per-run flags: `--genre <id>`, `--images <gemini|comfyui|fal|stock>`, `--motion <none|gemini|fal|comfyui>`, `--storyboard-only`, `--storyboard <path>` (re-render a saved storyboard), `--reuse-visuals <run folder>` (reuse its images), `--no-upload`.
+
+Each run writes `storyboard.json`, `timing.json`, the scene images, voice, captions and `<run>_final.mp4` to `output/<run>/`.
+
+To create the YouTube, Instagram and Facebook accounts and fill in the publishing keys, follow **[docs/CHANNEL_SETUP.md](docs/CHANNEL_SETUP.md)**.
 
 ## Reddit access
 
@@ -87,13 +110,15 @@ Prompt, seed, size, frame count and reference images are filled in automatically
 
 ## Audio
 
-- Music: put royalty-free tracks in `assets/music/<mood>/` (`tense`, `mysterious`, `upbeat`, `emotional`, `dark`, `playful`) or straight into `assets/music/`; they're ducked under the voice.
-- SFX: `assets/sfx/whoosh.*`, `impact.*`, `riser.*` play on the storyboard's cues. Missing files are skipped.
+- **Music:** `npm run make-music` generates one ~2-minute instrumental per mood (`tense`, `mysterious`, `upbeat`, `emotional`, `dark`, `playful`) into `assets/music/<mood>/` with Lyria ($0.08 each, once). Each video starts its mood's track at a random point, fades it in and out, and ducks it under the voice. You can also drop your own royalty-free tracks there.
+- **SFX:** `npm run make-sfx` synthesizes `assets/sfx/whoosh.wav`, `impact.wav` and `riser.wav` (no licences involved); they play on the storyboard's cues.
+- **Loudness:** every mix is normalized to -14 LUFS / -1.5 dBTP, the level YouTube and Instagram play at.
+- **Endings:** the final line is checked; an abrupt ending ("…proving that…") is rewritten by a cheap model call, or trimmed to its last complete clause.
 
 ## Compliance defaults
 
-- YouTube uploads set `containsSyntheticMedia: true`; turn on Meta's "AI info" label for Reels.
 - True stories never invent facts; fiction is labelled; Reddit stories are retold, not read.
+- YouTube uploads set `containsSyntheticMedia: true`; Instagram and Facebook Reels send `is_ai_generated: true` (Meta's "AI info" label).
 - Keep `ENABLE_AUTO_UPLOAD=false` while testing.
 
 See `BLUEPRINT.md` for YouTube/Meta API setup.

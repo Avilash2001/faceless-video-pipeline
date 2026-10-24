@@ -7,6 +7,7 @@ import { MotionJob, MotionProvider } from '../types.js';
 export const comfyMotionProvider: MotionProvider = {
   name: 'comfyui',
   costPerSecondUsd: 0,
+  billedSeconds: (seconds) => seconds,
   async animate(job: MotionJob): Promise<string> {
     // Wan expects 4n+1 frames.
     const frames = Math.round((job.seconds * CONFIG.comfyui.videoFps) / 4) * 4 + 1;

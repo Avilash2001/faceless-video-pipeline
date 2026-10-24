@@ -9,6 +9,13 @@ db.exec('PRAGMA journal_mode = WAL;');
 
 export function initDatabase(): void {
   db.exec(`
+    CREATE TABLE IF NOT EXISTS spend_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      item TEXT NOT NULL,
+      usd REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
     CREATE TABLE IF NOT EXISTS videos (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       source_external_id TEXT UNIQUE NOT NULL,

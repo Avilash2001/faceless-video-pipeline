@@ -1,5 +1,4 @@
 import fs from 'fs';
-import path from 'path';
 import { google } from 'googleapis';
 import { request } from 'undici';
 import { CONFIG } from '../config.js';
@@ -8,8 +7,8 @@ import { Storyboard, PlatformUploadResult } from '../types.js';
 /**
  * Publishes the rendered vertical MP4 concurrently to:
  * 1. YouTube Shorts (via YouTube Data API v3)
- * 2. Instagram Reels (via Instagram Graph API v21.0)
- * 3. Facebook Page Reels (via Facebook Video Reels Binary Upload API v21.0)
+ * 2. Instagram Reels (Graph API resumable upload)
+ * 3. Facebook Page Reels (Graph API video_reels binary upload)
  */
 export async function publishAcrossPlatforms(
   mp4Path: string,
@@ -100,83 +99,90 @@ async function uploadToYouTubeShorts(
   return res.data.id || undefined;
 }
 
+/**
+ * Instagram Reels via the resumable upload flow: the MP4 bytes go straight to
+ * rupload.facebook.com, so no public video URL or bucket is needed.
+ */
 async function uploadToInstagramReels(
   mp4Path: string,
   script: Storyboard
 ): Promise<string | undefined> {
-  const { accessToken, igBusinessId, publicVideoBaseUrl } = CONFIG.meta;
-  if (
-    !accessToken ||
-    !igBusinessId ||
-    !publicVideoBaseUrl ||
-    accessToken.includes('your_') ||
-    igBusinessId.includes('your_') ||
-    publicVideoBaseUrl.includes('yourdomain.com')
-  ) {
-    console.log('[Publisher] Skipping Instagram Reels (META_ACCESS_TOKEN or PUBLIC_VIDEO_BASE_URL not configured).');
+  const { accessToken, igBusinessId, graphVersion } = CONFIG.meta;
+  if (!accessToken || !igBusinessId || accessToken.includes('your_') || igBusinessId.includes('your_')) {
+    console.log('[Publisher] Skipping Instagram Reels (META_ACCESS_TOKEN or INSTAGRAM_BUSINESS_ACCOUNT_ID not configured).');
     return undefined;
   }
+  const graph = `https://graph.facebook.com/${graphVersion}`;
 
-  const fileName = path.basename(mp4Path);
-  const publicVideoUrl = `${publicVideoBaseUrl.replace(/\/$/, '')}/${fileName}`;
-
-  const createUrl = `https://graph.facebook.com/v21.0/${igBusinessId}/media`;
-  const createRes = await request(createUrl, {
+  const createRes = await request(`${graph}/${igBusinessId}/media`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       media_type: 'REELS',
-      video_url: publicVideoUrl,
+      upload_type: 'resumable',
       caption: `${script.instagramMetadata.caption}\n\n${script.creditLine}`,
       share_to_feed: true,
+      // Meta's AI disclosure ("AI info" label).
+      is_ai_generated: true,
       access_token: accessToken,
     }),
   });
-
   const createData = (await createRes.body.json()) as any;
   if (!createData.id) {
     throw new Error(`IG container creation failed: ${JSON.stringify(createData)}`);
   }
-
   const creationId = createData.id;
 
-  for (let attempt = 0; attempt < 15; attempt++) {
-    await new Promise((r) => setTimeout(r, 6000));
-    const statusRes = await request(
-      `https://graph.facebook.com/v21.0/${creationId}?fields=status_code&access_token=${accessToken}`
-    );
-    const statusData = (await statusRes.body.json()) as any;
-    if (statusData.status_code === 'FINISHED') break;
-    if (statusData.status_code === 'ERROR') {
-      throw new Error(`IG media processing error: ${JSON.stringify(statusData)}`);
-    }
-  }
-
-  const pubRes = await request(
-    `https://graph.facebook.com/v21.0/${igBusinessId}/media_publish`,
+  const fileBuffer = fs.readFileSync(mp4Path);
+  const uploadRes = await request(
+    createData.uri || `https://rupload.facebook.com/ig-api-upload/${graphVersion}/${creationId}`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        creation_id: creationId,
-        access_token: accessToken,
-      }),
+      headers: {
+        Authorization: `OAuth ${accessToken}`,
+        offset: '0',
+        file_size: String(fileBuffer.byteLength),
+      },
+      body: fileBuffer,
     }
   );
-  const pubData = (await pubRes.body.json()) as any;
+  const uploadData = (await uploadRes.body.json()) as any;
+  if (!uploadData.success) {
+    throw new Error(`IG video upload failed: ${JSON.stringify(uploadData)}`);
+  }
 
-  if (pubData.id && script.instagramMetadata.firstCommentPrompt) {
-    await request(
-      `https://graph.facebook.com/v21.0/${pubData.id}/comments`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: script.instagramMetadata.firstCommentPrompt,
-          access_token: accessToken,
-        }),
-      }
-    ).catch(() => {});
+  // Meta recommends checking about once a minute for up to 5 minutes; never publish early.
+  let status = 'IN_PROGRESS';
+  for (const waitMs of [20_000, 40_000, 60_000, 60_000, 60_000, 60_000]) {
+    await new Promise((r) => setTimeout(r, waitMs));
+    const statusRes = await request(`${graph}/${creationId}?fields=status_code&access_token=${accessToken}`);
+    status = ((await statusRes.body.json()) as any).status_code;
+    if (status === 'FINISHED') break;
+    if (status === 'ERROR' || status === 'EXPIRED') {
+      throw new Error(`IG media processing ended with ${status}`);
+    }
+  }
+  if (status !== 'FINISHED') {
+    throw new Error(`IG media still ${status} after 5 minutes; not publishing.`);
+  }
+
+  const pubRes = await request(`${graph}/${igBusinessId}/media_publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ creation_id: creationId, access_token: accessToken }),
+  });
+  const pubData = (await pubRes.body.json()) as any;
+  if (!pubData.id) {
+    throw new Error(`IG publish failed: ${JSON.stringify(pubData)}`);
+  }
+
+  // Needs the instagram_manage_comments permission.
+  if (script.instagramMetadata.firstCommentPrompt) {
+    await request(`${graph}/${pubData.id}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: script.instagramMetadata.firstCommentPrompt, access_token: accessToken }),
+    }).catch(() => {});
   }
 
   return pubData.id;
@@ -186,7 +192,7 @@ async function uploadToFacebookReels(
   mp4Path: string,
   script: Storyboard
 ): Promise<string | undefined> {
-  const { accessToken, fbPageId } = CONFIG.meta;
+  const { accessToken, fbPageId, graphVersion } = CONFIG.meta;
   if (
     !accessToken ||
     !fbPageId ||
@@ -197,7 +203,7 @@ async function uploadToFacebookReels(
     return undefined;
   }
 
-  const startUrl = `https://graph.facebook.com/v21.0/${fbPageId}/video_reels`;
+  const startUrl = `https://graph.facebook.com/${graphVersion}/${fbPageId}/video_reels`;
   const startRes = await request(startUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -234,6 +240,8 @@ async function uploadToFacebookReels(
       video_id: startData.video_id,
       upload_phase: 'finish',
       video_state: 'PUBLISHED',
+      // Meta's AI disclosure ("AI info" label).
+      is_ai_generated: true,
       description: withCredits(`${script.facebookMetadata.title}\n\n${script.facebookMetadata.description}`, script),
     }),
   });

@@ -11,7 +11,7 @@ export const falImageProvider: ImageProvider = {
     const useEdit = job.refImages.length > 0 && Boolean(CONFIG.fal.imageEditModel);
     const result = await falRun(useEdit ? CONFIG.fal.imageEditModel : CONFIG.fal.imageModel, {
       prompt: job.prompt,
-      image_size: job.aspectRatio === '1:1' ? 'square_hd' : 'portrait_16_9',
+      image_size: { '9:16': 'portrait_16_9', '1:1': 'square_hd', '16:9': 'landscape_16_9' }[job.aspectRatio],
       num_images: 1,
       output_format: 'png',
       ...(useEdit ? { image_urls: job.refImages.map(toDataUri) } : { seed: job.seed }),

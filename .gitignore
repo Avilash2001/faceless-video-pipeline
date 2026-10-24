@@ -10,3 +10,7 @@ assets/cache/*
 
 # macOS Finder metadata
 .DS_Store
+
+# Generated music library (npm run make-music); copy the folder between machines instead
+assets/music/*
+!assets/music/.gitkeep

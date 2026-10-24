@@ -147,6 +147,7 @@ TASK:
 4. Synthesize 4 concrete "doRules" and 3 "dontRules" based on structural differences between the winning scripts and losing scripts.`;
 
   const response = await generateContentWithFallback({
+    label: 'strategy-evolve',
     contents: prompt,
     responseSchema: {
       type: Type.OBJECT,
@@ -238,7 +239,8 @@ async function fetchYouTubeMetrics(videoId: string) {
 async function fetchInstagramMetrics(mediaId: string, durationSec: number) {
   if (!CONFIG.meta.accessToken) return null;
   try {
-    const url = `https://graph.facebook.com/v21.0/${mediaId}/insights?metric=plays,saved,shares,comments,ig_reels_avg_watch_time&access_token=${CONFIG.meta.accessToken}`;
+    // `plays` was retired for Reels; `views` replaces it.
+    const url = `https://graph.facebook.com/${CONFIG.meta.graphVersion}/${mediaId}/insights?metric=views,saved,shares,comments,ig_reels_avg_watch_time&access_token=${CONFIG.meta.accessToken}`;
     const res = await request(url);
     if (res.statusCode !== 200) return null;
     const data = (await res.body.json()) as any;
@@ -248,7 +250,7 @@ async function fetchInstagramMetrics(mediaId: string, durationSec: number) {
     }
     const avgWatchSec = (map.ig_reels_avg_watch_time || 0) / 1000;
     return {
-      plays: map.plays || 0,
+      plays: map.views || 0,
       saves: map.saved || 0,
       shares: map.shares || 0,
       comments: map.comments || 0,
@@ -262,7 +264,8 @@ async function fetchInstagramMetrics(mediaId: string, durationSec: number) {
 async function fetchFacebookMetrics(videoId: string, durationSec: number) {
   if (!CONFIG.meta.accessToken) return null;
   try {
-    const url = `https://graph.facebook.com/v21.0/${videoId}/video_insights?metric=total_video_views,total_video_avg_time_watched&access_token=${CONFIG.meta.accessToken}`;
+    // Reels report plays and watch time under their own metric names.
+    const url = `https://graph.facebook.com/${CONFIG.meta.graphVersion}/${videoId}/video_insights?metric=blue_reels_play_count,post_video_avg_time_watched&access_token=${CONFIG.meta.accessToken}`;
     const res = await request(url);
     if (res.statusCode !== 200) return null;
     const data = (await res.body.json()) as any;
@@ -270,9 +273,9 @@ async function fetchFacebookMetrics(videoId: string, durationSec: number) {
     for (const item of data?.data || []) {
       map[item.name] = Number(item.values?.[0]?.value || 0);
     }
-    const avgWatchSec = (map.total_video_avg_time_watched || 0) / 1000;
+    const avgWatchSec = (map.post_video_avg_time_watched || 0) / 1000;
     return {
-      views: map.total_video_views || 0,
+      views: map.blue_reels_play_count || 0,
       avgWatchPct: durationSec > 0 ? (avgWatchSec / durationSec) * 100 : 0,
       reactions: 0,
       shares: 0,

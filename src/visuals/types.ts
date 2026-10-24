@@ -4,7 +4,7 @@ export interface ImageJob {
   prompt: string;
   /** Local paths of character reference sheets to keep people consistent. */
   refImages: string[];
-  aspectRatio: '9:16' | '1:1';
+  aspectRatio: '9:16' | '1:1' | '16:9';
   seed: number;
   /** Output path without extension; the provider adds the right one. */
   outBase: string;
@@ -38,5 +38,7 @@ export interface MotionJob {
 export interface MotionProvider {
   name: MotionProviderName;
   costPerSecondUsd: number;
+  /** Seconds the provider bills for a requested clip length. */
+  billedSeconds(seconds: number): number;
   animate(job: MotionJob): Promise<string>;
 }

@@ -1,4 +1,5 @@
 import { Type } from '@google/genai';
+import { CONFIG } from '../config.js';
 import { GENRES } from '../genres.js';
 import { NicheCategory, StoryBrief, StoryCandidate } from '../types.js';
 import { generateContentWithFallback } from './gemini.js';
@@ -55,6 +56,8 @@ ${c.bodyText.slice(0, 3500)}${
     .join('\n\n');
 
   const response = await generateContentWithFallback({
+    model: CONFIG.gemini.editorModel,
+    label: 'story-editor',
     contents,
     systemInstruction,
     responseSchema: {

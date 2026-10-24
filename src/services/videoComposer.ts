@@ -24,16 +24,31 @@ export interface ComposeVideoOptions {
 
 const FPS = 30;
 const AUDIO_FORMAT = 'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo';
+// The TTS voice is mono; copying it to both channels avoids the -3 dB of automatic upmixing.
+const VOICE_FORMAT = `aresample=48000,pan=stereo|c0=c0|c1=c0,${AUDIO_FORMAT}`;
 
 /**
  * Fails fast with a fix-it message when ffmpeg can't burn in .ass subtitles.
  * Homebrew's core `ffmpeg` formula is built without libass; `ffmpeg-full` has it.
  * Probes ffmpeg directly: fluent-ffmpeg's getAvailableFilters() can't parse ffmpeg 8+ output.
  */
-async function assertLibassAvailable(): Promise<void> {
-  // Same resolution order fluent-ffmpeg uses: FFMPEG_PATH if it exists, else PATH.
+// Same resolution order fluent-ffmpeg uses: FFMPEG_PATH if it exists, else PATH.
+function ffmpegBinary(): string {
   const envPath = process.env.FFMPEG_PATH;
-  const binary = envPath && fs.existsSync(envPath) ? envPath : 'ffmpeg';
+  return envPath && fs.existsSync(envPath) ? envPath : 'ffmpeg';
+}
+
+/** Media duration from ffmpeg's banner (avoids depending on a separate ffprobe binary). */
+async function probeDurationSeconds(file: string): Promise<number> {
+  const output = await new Promise<string>((resolve) =>
+    execFile(ffmpegBinary(), ['-hide_banner', '-i', file], (_err, stdout, stderr) => resolve(`${stdout}${stderr}`))
+  );
+  const m = /Duration: (\d+):(\d+):(\d+(?:\.\d+)?)/.exec(output);
+  return m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0;
+}
+
+async function assertLibassAvailable(): Promise<void> {
+  const binary = ffmpegBinary();
   const output = await new Promise<string>((resolve) =>
     execFile(binary, ['-hide_banner', '-h', 'filter=ass'], (_err, stdout, stderr) =>
       resolve(`${stdout}${stderr}`)
@@ -80,6 +95,9 @@ export async function composeFinalShortMp4(opts: ComposeVideoOptions): Promise<s
   const escapedAssPath = opts.assSubtitlePath.replace(/\\/g, '/').replace(/:/g, '\\:');
 
   const totalFrames = Math.round(opts.durationSeconds * FPS);
+  // Start the bed at a random point so videos sharing a mood track don't all open the same way.
+  const musicDuration = opts.musicPath ? await probeDurationSeconds(opts.musicPath) : 0;
+  const musicOffset = Math.max(0, Math.random() * Math.min(90, musicDuration - opts.durationSeconds - 2));
   const bounds = opts.scenes.map((s) => Math.min(totalFrames - 1, Math.round((s.startMs / 1000) * FPS)));
   bounds.push(totalFrames);
 
@@ -111,37 +129,39 @@ export async function composeFinalShortMp4(opts: ComposeVideoOptions): Promise<s
     cmd.input(opts.audioPath);
 
     const mixInputs: string[] = [];
-    let audioMap = `${voiceIndex}:a:0`;
     const sfx = (opts.sfx || []).filter((e) => fs.existsSync(e.path));
 
-    if (opts.musicPath || sfx.length > 0) {
-      if (opts.musicPath) {
-        filters.push(`[${voiceIndex}:a]${AUDIO_FORMAT},asplit=2[voice][vkey]`);
-        const musicIndex = inputIndex++;
-        cmd.input(opts.musicPath).inputOptions(['-stream_loop -1']);
-        filters.push(
-          `[${musicIndex}:a]${AUDIO_FORMAT},volume=${CONFIG.audio.musicVolume}[mbed]`,
-          `[mbed][vkey]sidechaincompress=threshold=0.04:ratio=10:attack=15:release=350[music]`
-        );
-        mixInputs.push('[voice]', '[music]');
-      } else {
-        filters.push(`[${voiceIndex}:a]${AUDIO_FORMAT}[voice]`);
-        mixInputs.push('[voice]');
-      }
-
-      sfx.forEach((event, i) => {
-        const sfxIndex = inputIndex++;
-        const delay = Math.max(0, Math.round(event.atMs));
-        cmd.input(event.path);
-        filters.push(`[${sfxIndex}:a]${AUDIO_FORMAT},volume=0.5,adelay=${delay}|${delay}[fx${i}]`);
-        mixInputs.push(`[fx${i}]`);
-      });
-
+    if (opts.musicPath) {
+      filters.push(`[${voiceIndex}:a]${VOICE_FORMAT},asplit=2[voice][vkey]`);
+      const musicIndex = inputIndex++;
+      cmd.input(opts.musicPath).inputOptions(['-stream_loop -1', `-ss ${musicOffset.toFixed(2)}`]);
+      const fadeOutStart = Math.max(0, opts.durationSeconds - 1.5).toFixed(2);
       filters.push(
-        `${mixInputs.join('')}amix=inputs=${mixInputs.length}:duration=first:dropout_transition=0:normalize=0[aout]`
+        `[${musicIndex}:a]${AUDIO_FORMAT},volume=${CONFIG.audio.musicVolume},afade=t=in:d=0.8,afade=t=out:st=${fadeOutStart}:d=1.5[mbed]`,
+        `[mbed][vkey]sidechaincompress=threshold=0.04:ratio=10:attack=15:release=350[music]`
       );
-      audioMap = '[aout]';
+      mixInputs.push('[voice]', '[music]');
+    } else {
+      filters.push(`[${voiceIndex}:a]${VOICE_FORMAT}[voice]`);
+      mixInputs.push('[voice]');
     }
+
+    sfx.forEach((event, i) => {
+      const sfxIndex = inputIndex++;
+      const delay = Math.max(0, Math.round(event.atMs));
+      cmd.input(event.path);
+      filters.push(`[${sfxIndex}:a]${AUDIO_FORMAT},volume=0.65,adelay=${delay}|${delay}[fx${i}]`);
+      mixInputs.push(`[fx${i}]`);
+    });
+
+    // Platforms normalize to about -14 LUFS but only turn loud audio down, so a quiet mix
+    // stays quiet in the feed: normalize the final mix to -14 LUFS / -1.5 dBTP.
+    const mixed =
+      mixInputs.length > 1
+        ? `${mixInputs.join('')}amix=inputs=${mixInputs.length}:duration=first:dropout_transition=0:normalize=0,`
+        : `${mixInputs[0]}`;
+    filters.push(`${mixed}loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000[aout]`);
+    const audioMap = '[aout]';
 
     cmd
       .complexFilter(filters)

@@ -38,6 +38,7 @@ export async function synthesizeSpeechWithTimings(
 
   const writeStream = fs.createWriteStream(audioFilePath);
 
+  // Close the WebSocket afterwards; an open socket keeps one-off runs from exiting.
   await new Promise<void>((resolve, reject) => {
     audioStream.pipe(writeStream);
 
@@ -65,7 +66,7 @@ export async function synthesizeSpeechWithTimings(
     writeStream.on('finish', () => resolve());
     writeStream.on('error', reject);
     audioStream.on('error', reject);
-  });
+  }).finally(() => tts.close());
 
   if (wordTimings.length === 0) {
     const words = text.split(/\s+/).filter(Boolean);

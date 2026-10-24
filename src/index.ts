@@ -9,7 +9,8 @@ import {
   syncCrossPlatformMetrics,
 } from './services/analyticsLoop.js';
 import { buildSfxEvents, pickMusicTrack } from './services/audioAssets.js';
-import { generateStoryboard } from './services/llmEngine.js';
+import { currentRunSpendUsd, formatCost, todaysSpendUsd } from './services/costs.js';
+import { ensureCleanEnding, generateStoryboard } from './services/llmEngine.js';
 import { publishAcrossPlatforms } from './services/publisher.js';
 import { alignScenesToTimings } from './services/sceneTiming.js';
 import { selectAndBriefStory } from './services/storyEditor.js';
@@ -18,7 +19,7 @@ import { synthesizeSpeechWithTimings } from './services/ttsEngine.js';
 import { composeFinalShortMp4 } from './services/videoComposer.js';
 import { findStoryCandidates } from './sources/index.js';
 import { pickRandom } from './sources/util.js';
-import { NicheCategory, StoryBrief, Storyboard, StrategyRules } from './types.js';
+import { NicheCategory, SceneMedia, StoryBrief, Storyboard, StrategyRules } from './types.js';
 import { generateSceneMedia } from './visuals/index.js';
 
 export interface RunOptions {
@@ -30,6 +31,8 @@ export interface RunOptions {
   upload?: boolean;
   /** Re-render a saved output/<run>/storyboard.json instead of finding a new story. */
   storyboardPath?: string;
+  /** Reuse the scene visuals of a previous output/<run> folder (same storyboard) instead of paying again. */
+  reuseVisualsDir?: string;
 }
 
 /**
@@ -46,6 +49,7 @@ export async function runSinglePipelineCycle(opts: RunOptions = {}): Promise<voi
   let storyboard: Storyboard;
   if (opts.storyboardPath) {
     ({ brief, storyboard } = JSON.parse(fs.readFileSync(opts.storyboardPath, 'utf-8')));
+    storyboard = await ensureCleanEnding(storyboard);
     console.log(`[Pipeline] 1-3/7 Reusing storyboard "${storyboard.youtubeMetadata.title}" from ${opts.storyboardPath}`);
   } else {
     console.log(`[Pipeline] 1/7 Finding story candidates (Strategy v${strategy.version})...`);
@@ -89,7 +93,9 @@ export async function runSinglePipelineCycle(opts: RunOptions = {}): Promise<voi
   console.log(
     `[Pipeline] 5/7 Generating scene visuals (images: ${CONFIG.visuals.imageProvider}, motion: ${CONFIG.visuals.motionProvider})...`
   );
-  const visuals = await generateSceneMedia(storyboard, timedScenes, runDir);
+  const visuals = opts.reuseVisualsDir
+    ? reuseVisuals(opts.reuseVisualsDir, timedScenes.length)
+    : await generateSceneMedia(storyboard, timedScenes, runDir);
   const byProvider = visuals.media.reduce<Record<string, number>>((acc, m) => {
     acc[m.provider] = (acc[m.provider] || 0) + 1;
     return acc;
@@ -175,7 +181,19 @@ export async function runSinglePipelineCycle(opts: RunOptions = {}): Promise<voi
     fbId || null
   );
 
-  console.log('[Pipeline] Cycle complete!');
+  console.log(
+    `[Pipeline] Cycle complete! API spend for this video: ${formatCost(currentRunSpendUsd())}; ` +
+      `today: ${formatCost(todaysSpendUsd())} of the $${CONFIG.costs.dailyBudgetUsd} daily budget.`
+  );
+}
+
+function reuseVisuals(dir: string, sceneCount: number) {
+  const timing = JSON.parse(fs.readFileSync(path.join(dir, 'timing.json'), 'utf-8')) as { media: SceneMedia }[];
+  if (timing.length !== sceneCount) {
+    throw new Error(`--reuse-visuals: ${dir} has ${timing.length} scenes but this storyboard has ${sceneCount}.`);
+  }
+  console.log(`[Pipeline] Reusing ${sceneCount} scene visuals from ${dir} (no image cost).`);
+  return { media: timing.map((t) => t.media), estimatedCostUsd: 0 };
 }
 
 function argValue(args: string[], name: string): string | undefined {
@@ -200,6 +218,7 @@ function applyOverrides(args: string[]): RunOptions {
     storyboardOnly: args.includes('--storyboard-only'),
     upload: !args.includes('--no-upload'),
     storyboardPath: argValue(args, 'storyboard'),
+    reuseVisualsDir: argValue(args, 'reuse-visuals'),
   };
 }
 

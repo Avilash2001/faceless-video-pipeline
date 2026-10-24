@@ -1,4 +1,5 @@
 import { Type } from '@google/genai';
+import { CONFIG } from '../config.js';
 import { GENRES, VISUAL_STYLES } from '../genres.js';
 import { pickRandom, pickWeightedKey } from '../sources/util.js';
 import { HookArchetype, StoryBrief, Storyboard, StrategyRules } from '../types.js';
@@ -54,7 +55,7 @@ NARRATION:
 - 9 to 14 scenes. Each scene's "narration" is ONE short line (5-14 words) that gets its own image, so the visual changes every 2-4 seconds.
 - Scene 1 is the hook: 10 words or fewer.
 - Build: setup, complication, a reversal around the middle, the turn, then the payoff in the last 20%.
-- The final scene resolves the hook and its last words flow naturally back into scene 1.
+- The final scene is the payoff: ONE complete, satisfying sentence that resolves the story and answers the hook. It may echo the hook's words so a replay feels like a loop, but it must make sense on its own: never end mid-sentence, on a word like "that", "when" or "because", with an ellipsis, or on a cliffhanger.
 - Plain spoken English. No emojis, hashtags, stage directions or speaker labels in narration.
 - Narration uses names or pronouns, NEVER character ids like "C1" (ids are only for visual prompts).
 
@@ -64,7 +65,8 @@ VISUALS (art style "${styleName}": ${VISUAL_STYLES[styleName]}):
 - Never ask for text, letters, signs, logos, watermarks or UI in the image.
 - ${isFiction || genre.source === 'reddit' ? 'Characters are invented people.' : 'Real people are depicted as stylized illustrations, never photorealistic likenesses.'}
 - "characters": 1-3 recurring people with a fixed visual description (age, build, hair, skin tone, clothing, one distinctive detail).
-- "camera": vary it; use push_in for tension, pull_out for reveals, pans for movement.
+- "sameShotAsPrevious": true when a line continues the exact same moment and place as the previous scene, so its image is reused with a different camera move. Aim for 7-9 distinct images in total. Never true for scene 1, the reversal, or the final payoff.
+- "camera": vary it; use push_in for tension, pull_out for reveals, pans for movement. A reused shot must use a different camera move than the scene before it.
 - "sfx": whoosh on a location or time jump, impact on the reversal, riser just before the twist, otherwise none.
 - Mark exactly 2 scenes as "motionCandidate": the hook and the climax. Their "motionPrompt" describes the motion for an image-to-video model (subject movement + camera move, 1 sentence). Other scenes: motionCandidate false and motionPrompt "".
 - "hookOverlayText": 3-6 punchy words shown over the first frame (no question marks needed, no emojis).
@@ -82,6 +84,7 @@ Twist: ${brief.twist}
 Ending: ${brief.ending}`;
 
   const response = await generateContentWithFallback({
+    label: 'storyboard',
     contents: userPrompt,
     systemInstruction,
     responseSchema: {
@@ -117,6 +120,7 @@ Ending: ${brief.ending}`;
               'visualPrompt',
               'stockQuery',
               'characterIds',
+              'sameShotAsPrevious',
               'camera',
               'sfx',
               'motionCandidate',
@@ -130,6 +134,7 @@ Ending: ${brief.ending}`;
                 description: '2-4 word stock footage search, e.g. "bank vault door"',
               },
               characterIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+              sameShotAsPrevious: { type: Type.BOOLEAN },
               camera: {
                 type: Type.STRING,
                 enum: ['push_in', 'pull_out', 'pan_left', 'pan_right', 'pan_up', 'pan_down'],
@@ -170,7 +175,11 @@ Ending: ${brief.ending}`;
   });
 
   const parsed = JSON.parse(response.text || '{}');
-  const scenes = (parsed.scenes || []).map((s: any, index: number) => ({ ...s, index }));
+  const scenes = (parsed.scenes || []).map((s: any, index: number) => ({
+    ...s,
+    index,
+    sameShotAsPrevious: index > 0 && Boolean(s.sameShotAsPrevious),
+  }));
   if (scenes.length < 3) {
     throw new Error(`Storyboard came back with ${scenes.length} scenes; expected 9-14.`);
   }
@@ -182,7 +191,7 @@ Ending: ${brief.ending}`;
       ? `Inspired by ${brief.candidate.sourceLabel}. Names and details changed.`
       : `Based on documented events. Source: ${brief.candidate.sourceLabel}.`;
 
-  return {
+  return ensureCleanEnding({
     niche,
     hookArchetype: hook,
     isFiction,
@@ -198,5 +207,70 @@ Ending: ${brief.ending}`;
     youtubeMetadata: parsed.youtubeMetadata,
     instagramMetadata: parsed.instagramMetadata,
     facebookMetadata: parsed.facebookMetadata,
-  };
+  });
+}
+
+// Words a finished sentence can't end on.
+const DANGLING_WORD =
+  /^(that|when|because|where|which|who|whom|whose|and|but|so|or|until|while|how|why|what|if|as|to|the|a|an|of|with|for|than|then|proving|showing|meaning)$/i;
+
+function lastWord(line: string): string {
+  return (
+    line
+      .trim()
+      .replace(/[.!?"'\u201d\u2019)]+$/, '')
+      .split(/\s+/)
+      .pop() || ''
+  );
+}
+
+export function endsCleanly(line: string): boolean {
+  const t = line.trim();
+  if (/(\.\.\.|\u2026)["'\u201d\u2019)]*$/.test(t)) return false;
+  if (!/[.!?]["'\u201d\u2019)]*$/.test(t)) return false;
+  return !DANGLING_WORD.test(lastWord(t));
+}
+
+/** Last resort: drop a trailing clause that ends on a dangling word and close the sentence. */
+function trimDangling(line: string): string {
+  let t = line.trim().replace(/(\.\.\.|\u2026)$/, '').replace(/[,;:\s]+$/, '');
+  if (DANGLING_WORD.test(lastWord(t)) && t.includes(',')) t = t.slice(0, t.lastIndexOf(','));
+  while (t.includes(' ') && DANGLING_WORD.test(lastWord(t))) t = t.slice(0, t.lastIndexOf(' '));
+  return /[.!?]$/.test(t) ? t : `${t}.`;
+}
+
+/**
+ * Guarantees the story ends on a complete sentence: an abrupt final line ("proving that...")
+ * is rewritten by a cheap model call, or trimmed to its last complete clause if that fails.
+ */
+export async function ensureCleanEnding(storyboard: Storyboard): Promise<Storyboard> {
+  const last = storyboard.scenes[storyboard.scenes.length - 1];
+  if (endsCleanly(last.narration)) return storyboard;
+  console.warn(`[Storyboard] Final line ends abruptly ("${last.narration}"); rewriting it.`);
+
+  let fixed: string | undefined;
+  try {
+    const response = await generateContentWithFallback({
+      model: CONFIG.gemini.editorModel,
+      label: 'ending-fix',
+      contents: `STORY:\n${storyboard.scenes
+        .slice(0, -1)
+        .map((s) => s.narration)
+        .join('\n')}\n\nCUT-OFF FINAL LINE: ${last.narration}`,
+      systemInstruction:
+        'Rewrite only the final line of this narrated short story as ONE complete, satisfying sentence of 6-16 words that resolves the story. Keep the same narrator voice. It may echo the opening line. No ellipsis, no cliffhanger, no question.',
+      responseSchema: {
+        type: Type.OBJECT,
+        required: ['finalLine'],
+        properties: { finalLine: { type: Type.STRING } },
+      },
+    });
+    fixed = JSON.parse(response.text || '{}').finalLine;
+  } catch (err) {
+    console.warn('[Storyboard] Ending rewrite failed:', (err as Error).message);
+  }
+
+  last.narration = fixed && endsCleanly(fixed) ? fixed.trim() : trimDangling(last.narration);
+  storyboard.fullNarrationText = storyboard.scenes.map((s) => s.narration).join(' ');
+  return storyboard;
 }

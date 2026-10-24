@@ -6,6 +6,7 @@ import { MotionJob, MotionProvider } from '../types.js';
 export const falMotionProvider: MotionProvider = {
   name: 'fal',
   costPerSecondUsd: CONFIG.fal.videoCostPerSecondUsd,
+  billedSeconds: (seconds) => (seconds > 7 ? 10 : 5),
   async animate(job: MotionJob): Promise<string> {
     const result = await falRun(CONFIG.fal.videoModel, {
       prompt: `${job.prompt} Keep the art style and characters of the image.`,
