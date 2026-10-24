@@ -1,0 +1,36 @@
+{
+  "name": "autonomous-faceless-video-pipeline",
+  "version": "1.0.0",
+  "description": "Self-optimizing multi-niche faceless video automation pipeline for YouTube Shorts, Instagram Reels, and Facebook Reels",
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev": "node --import tsx src/index.ts",
+    "generate": "node --import tsx src/index.ts --run-once",
+    "sync-metrics": "node --import tsx src/index.ts --sync-metrics",
+    "evolve": "node --import tsx src/index.ts --evolve",
+    "daemon": "node --import tsx src/index.ts --daemon",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^2.31.0",
+    "@resvg/resvg-js": "^2.6.2",
+    "dotenv": "^16.4.5",
+    "fluent-ffmpeg": "^2.1.3",
+    "googleapis": "^144.0.0",
+    "msedge-tts": "^2.0.4",
+    "node-cron": "^3.0.3",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "satori": "^0.10.14",
+    "undici": "^6.20.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/fluent-ffmpeg": "^2.1.27",
+    "@types/node": "^22.10.2",
+    "@types/node-cron": "^3.0.11",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-24T00:00:00.000Z",
+  "explorationRate": 0.25,
+  "targetDurationSeconds": {
+    "min": 32,
+    "max": 48
+  },
+  "nicheWeights": {
+    "tech_ai_postmortems": 0.25,
+    "workplace_legal_drama": 0.25,
+    "finance_money_psychology": 0.20,
+    "cybersecurity_scam_breakdowns": 0.15,
+    "weird_history_mysteries": 0.15
+  },
+  "hookArchetypeWeights": {
+    "shocking_mistake": 0.30,
+    "hidden_rule_exploit": 0.25,
+    "instant_karma_twist": 0.25,
+    "counterintuitive_fact": 0.20
+  },
+  "voicePool": [
+    "en-US-AndrewNeural",
+    "en-US-BrianNeural",
+    "en-US-ChristopherNeural"
+  ],
+  "voiceSpeedRate": "+12%",
+  "doRules": [
+    "Open with a high-stakes conflict or specific number in the first 2.5 seconds (under 12 words).",
+    "Combine the core story with 1-2 sharp analytical takeaways so the script is 100% transformative.",
+    "Switch visual B-roll keywords every 4 to 5 seconds to reset viewer attention.",
+    "Make the final sentence flow grammatically into the first word of the hook for a seamless loop."
+  ],
+  "dontRules": [
+    "Never start with 'Today we are talking about' or 'A user on Reddit posted'.",
+    "Avoid passive voice or sentences longer than 18 words.",
+    "Do not give away the final resolution before the last 5 seconds."
+  ]
+}
