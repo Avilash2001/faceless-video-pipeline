@@ -85,6 +85,10 @@ Per-run flags: `--genre <id>`, `--images <gemini|comfyui|fal|stock>`, `--motion 
 
 Each run writes `storyboard.json`, `timing.json`, the scene images, voice, captions and `<run>_final.mp4` to `output/<run>/`.
 
+`npm run daemon` runs the generate, metrics and evolve schedules and serves the dashboard at http://localhost:4747 (`DASHBOARD_PORT`). It listens on this machine only and has no login; to open it from another device, reach it over Tailscale and add that host name to `DASHBOARD_ALLOWED_HOSTS`.
+
+`npm test` runs the tests (Vitest); `npm run typecheck` checks types.
+
 To create the YouTube, Instagram and Facebook accounts and fill in the publishing keys, follow **[docs/CHANNEL_SETUP.md](docs/CHANNEL_SETUP.md)**.
 
 ## Reddit access

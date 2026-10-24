@@ -15,6 +15,7 @@ assets/cache/*
 assets/music/*
 !assets/music/.gitkeep
 
-# SQLite write-ahead log files
+# SQLite database and its write-ahead log files (local state, never committed)
+data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal

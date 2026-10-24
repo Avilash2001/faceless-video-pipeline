@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { CONFIG } from '../config.js';
-import { initDatabase } from '../db/index.js';
 import { formatCost, recordSpend, withinBudget } from '../services/costs.js';
 import { ai } from '../services/gemini.js';
 import { MusicMood } from '../types.js';
@@ -31,7 +30,6 @@ function argValue(name: string): string | undefined {
 }
 
 async function main() {
-  initDatabase();
   const perMood = Number(argValue('per-mood') || 1);
   const moods = (argValue('moods')?.split(',') || Object.keys(MOOD_PROMPTS)) as MusicMood[];
 

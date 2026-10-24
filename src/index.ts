@@ -1,8 +1,9 @@
 import fs from 'fs';
 import path from 'path';
-import cron from 'node-cron';
 import { CONFIG, ImageProviderName, MotionProviderName } from './config.js';
-import { db, initDatabase } from './db/index.js';
+import { systemClock } from './daemon/clock.js';
+import { createDaemon } from './daemon/index.js';
+import { db } from './db/index.js';
 import { GENRES } from './genres.js';
 import {
   evolveStrategyRules,
@@ -40,7 +41,6 @@ export interface RunOptions {
  * per scene, render, and (optionally) publish to YouTube Shorts, IG Reels, and FB Reels.
  */
 export async function runSinglePipelineCycle(opts: RunOptions = {}): Promise<void> {
-  initDatabase();
   const strategy: StrategyRules = JSON.parse(
     fs.readFileSync(CONFIG.paths.strategyFile, 'utf-8')
   );
@@ -223,7 +223,6 @@ function applyOverrides(args: string[]): RunOptions {
 }
 
 async function main() {
-  initDatabase();
   const args = process.argv.slice(2);
 
   if (args.includes('--sync-metrics')) {
@@ -239,22 +238,19 @@ async function main() {
   const runOptions = applyOverrides(args);
 
   if (args.includes('--daemon')) {
-    console.log('[Daemon] Starting autonomous cron workers...');
-    cron.schedule(CONFIG.schedule.generate, () => {
-      runSinglePipelineCycle(runOptions).catch((err) =>
-        console.error('[Daemon Generate Error]:', err)
-      );
+    const daemon = createDaemon(CONFIG, {
+      clock: systemClock,
+      pipeline: { run: () => runSinglePipelineCycle(runOptions) },
+      analytics: {
+        syncMetrics: syncCrossPlatformMetrics,
+        evolve: async () => {
+          await evolveStrategyRules();
+        },
+      },
     });
-    cron.schedule(CONFIG.schedule.metrics, () => {
-      syncCrossPlatformMetrics().catch((err) =>
-        console.error('[Daemon Metrics Error]:', err)
-      );
-    });
-    cron.schedule(CONFIG.schedule.evolve, () => {
-      evolveStrategyRules().catch((err) =>
-        console.error('[Daemon Evolve Error]:', err)
-      );
-    });
+    daemon.start();
+    const { port } = await daemon.listen();
+    console.log(`[Daemon] Schedules running; dashboard at http://localhost:${port}`);
     return;
   }
 
