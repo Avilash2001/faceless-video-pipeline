@@ -4,7 +4,7 @@ import type { Adapters } from '../../src/daemon/index.js';
 import type { Config } from '../../src/loadConfig.js';
 import type { Platform } from '../../src/platforms.js';
 import { currentRun } from '../../src/runContext.js';
-import type { PipelineResult, RunOptions, RunProgress } from '../../src/types.js';
+import type { PipelineResult, Push, RunOptions, RunProgress } from '../../src/types.js';
 import type { FakeClock } from './fakeClock.js';
 import { fakeStory, fakeStoryboard } from './fakeStory.js';
 
@@ -16,6 +16,9 @@ export function fakeAdapters(clock: FakeClock, config: Config) {
     syncMetrics: [] as Date[],
     evolve: [] as Date[],
     publish: [] as { platform: Platform; videoPath: string }[],
+    /** Pushes that reached the phone; a failed push isn't one. */
+    pushes: [] as ({ at: Date } & Push)[],
+    heartbeat: [] as { at: Date; url: string }[],
   };
   /** Set one to make that adapter fail with it until it is cleared. */
   const failures: {
@@ -23,6 +26,8 @@ export function fakeAdapters(clock: FakeClock, config: Config) {
     /** The step the Pipeline fails at, once it has started it; step 1 when unset. */
     pipelineStep?: number;
     publish: Partial<Record<Platform, string>>;
+    push?: string;
+    heartbeat?: string;
   } = { publish: {} };
   /** What each fake Run spends on paid Providers, taken in order; a Run spends nothing once it runs out. */
   const pipelineSpend: number[] = [];
@@ -78,6 +83,18 @@ export function fakeAdapters(clock: FakeClock, config: Config) {
       },
       evolve: async () => {
         calls.evolve.push(clock.now());
+      },
+    },
+    notifier: {
+      send: async (push) => {
+        if (failures.push) throw new Error(failures.push);
+        calls.pushes.push({ at: clock.now(), ...push });
+      },
+    },
+    heartbeat: {
+      ping: async (url) => {
+        if (failures.heartbeat) throw new Error(failures.heartbeat);
+        calls.heartbeat.push({ at: clock.now(), url });
       },
     },
   };

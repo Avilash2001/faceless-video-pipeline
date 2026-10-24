@@ -1,4 +1,6 @@
 import { html, raw } from 'hono/html';
+import type { ActiveAlert } from './alerts.js';
+import { formatLocalTime } from './localTime.js';
 
 type Html = ReturnType<typeof html>;
 
@@ -7,12 +9,24 @@ export interface FrontPage {
   startedAt: Date;
   /** Each scheduled task and when it next comes due. */
   nextUp: { name: string; due: Date }[];
+  /** Active Alerts, oldest first; shown above everything else. */
+  alerts: ActiveAlert[];
 }
 
-export function frontPage({ now, startedAt, nextUp }: FrontPage): Html {
+export function frontPage({ now, startedAt, nextUp, alerts }: FrontPage): Html {
   return layout(
     'Dashboard',
     html`
+      ${alerts.length > 0
+        ? html`<section class="alerts">
+            <h2>Alerts</h2>
+            <ul>
+              ${alerts.map(
+                ({ text, startedAt }) => html`<li>${text} <span class="muted">since ${localTime(startedAt)}</span></li>`
+              )}
+            </ul>
+          </section>`
+        : ''}
       <section>
         <dl>
           <dt>Daemon</dt>
@@ -55,9 +69,9 @@ function layout(title: string, body: Html): Html {
 
 // One column at any width; long words wrap instead of pushing the page sideways.
 const CSS = `
-  :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #666; --line: #ddd; --ok: #1a7f37; }
+  :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #666; --line: #ddd; --ok: #1a7f37; --alert: #b42318; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #131313; --fg: #ececec; --muted: #9b9b9b; --line: #333; --ok: #3fb950; }
+    :root { --bg: #131313; --fg: #ececec; --muted: #9b9b9b; --line: #333; --ok: #3fb950; --alert: #f85149; }
   }
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; overflow-wrap: anywhere; }
@@ -68,18 +82,16 @@ const CSS = `
   dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0; }
   dt { color: var(--muted); }
   dd { margin: 0; }
+  ul { margin: 0; padding-left: 1.25rem; }
+  .alerts { border-color: var(--alert); }
+  .alerts h2 { color: var(--alert); }
   .up { color: var(--ok); }
   .muted { color: var(--muted); }
 `;
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-
-/** "Sun 25 Oct 18:00", in the machine's local time. */
+/** A time on the page, written as `formatLocalTime` writes it. */
 function localTime(at: Date): Html {
-  const pad = (n: number) => String(n).padStart(2, '0');
-  const text = `${WEEKDAYS[at.getDay()]} ${at.getDate()} ${MONTHS[at.getMonth()]} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
-  return html`<time datetime="${at.toISOString()}">${text}</time>`;
+  return html`<time datetime="${at.toISOString()}">${formatLocalTime(at)}</time>`;
 }
 
 /** "in 2 d 6 h", "in 3 h 20 min", "in 5 min". */

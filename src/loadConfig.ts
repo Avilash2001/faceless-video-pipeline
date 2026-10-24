@@ -1,4 +1,5 @@
 import path from 'path';
+import { parseTimeRange } from './timeRange.js';
 
 export type ImageProviderName = 'gemini' | 'comfyui' | 'fal' | 'stock';
 export type MotionProviderName = 'none' | 'gemini' | 'fal' | 'comfyui';
@@ -121,6 +122,17 @@ export function loadConfig(env: NodeJS.ProcessEnv, root: string) {
         .split(',')
         .map((h) => h.trim().toLowerCase())
         .filter(Boolean),
+    },
+    alerts: {
+      /** The ntfy topic Alerts are pushed to; anyone who knows it can read them. Empty: no pushes. */
+      ntfyTopic: env.NTFY_TOPIC || '',
+      ntfyServer: (env.NTFY_SERVER || 'https://ntfy.sh').replace(/\/+$/, ''),
+      /** The nightly window, in local time, in which pushes are held, then sent as one when it ends. */
+      quietHours: parseTimeRange('QUIET_HOURS', env.QUIET_HOURS || '23:00-08:00'),
+    },
+    heartbeat: {
+      /** healthchecks.io ping URL, pinged every 5 minutes so it can push when the pings stop. Empty: no pings. */
+      url: env.HEALTHCHECK_URL || '',
     },
   };
 }

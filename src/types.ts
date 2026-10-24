@@ -184,3 +184,9 @@ export interface RenderedVideo {
   durationSec: number;
   voiceName: string;
 }
+
+/** One push to the operator's phone. */
+export interface Push {
+  title: string;
+  message: string;
+}

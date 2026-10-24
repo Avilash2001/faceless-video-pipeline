@@ -2,6 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { onTestFinished } from 'vitest';
+import type { AlertRule } from '../../src/daemon/alerts.js';
 import { createDaemon } from '../../src/daemon/index.js';
 import { loadConfig } from '../../src/loadConfig.js';
 import type { RunOptions } from '../../src/types.js';
@@ -12,20 +13,49 @@ const DASHBOARD = 'localhost:4747';
 
 /**
  * Starts a Daemon on a fake clock, with its database and folders in a fresh temp directory and
- * fake adapters, and tears it all down when the test finishes. `env` stands in for `.env`, and
- * `slotOptions` for the flags `pnpm daemon` was started with.
+ * fake adapters, and tears it all down when the test finishes. `env` is written to `.env` and
+ * the config is built from it; `envExample`, when given, is written to `.env.example`.
+ * `slotOptions` stands in for the flags `pnpm daemon` was started with, and `alertRules` are
+ * checked along with the Daemon's own.
  */
-export function startTestDaemon(opts: { now: Date; env?: Record<string, string>; slotOptions?: RunOptions }) {
+export function startTestDaemon(opts: {
+  now: Date;
+  env?: Record<string, string>;
+  envExample?: string;
+  slotOptions?: RunOptions;
+  alertRules?: AlertRule[];
+}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fvp-daemon-'));
+  let stopDaemon = async () => {};
+  onTestFinished(async () => {
+    await stopDaemon();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /** Rewrites `.env`, as the operator does by hand. The running config doesn't change. */
+  const writeEnv = (env: Record<string, string>) =>
+    fs.writeFileSync(
+      path.join(root, '.env'),
+      Object.entries(env)
+        .map(([key, value]) => `${key}=${value}\n`)
+        .join('')
+    );
+  writeEnv(opts.env ?? {});
+  if (opts.envExample !== undefined) fs.writeFileSync(path.join(root, '.env.example'), opts.envExample);
+
   const config = loadConfig(opts.env ?? {}, root);
   const clock = new FakeClock(opts.now);
   const { adapters, calls, failures, pipelineSpend } = fakeAdapters(clock, config);
-  const daemon = createDaemon(config, adapters, opts.slotOptions);
-  daemon.start();
-  onTestFinished(async () => {
-    await daemon.stop();
-    fs.rmSync(root, { recursive: true, force: true });
-  });
+  const startDaemon = (env: Record<string, string>) => {
+    const started = createDaemon(loadConfig(env, root), adapters, {
+      slotOptions: opts.slotOptions,
+      alertRules: opts.alertRules,
+    });
+    started.start();
+    stopDaemon = () => started.stop();
+    return started;
+  };
+  let daemon = startDaemon(opts.env ?? {});
 
   /** Sends a request in-process, as a browser on the dashboard's own page would by default. */
   const request = (pathname: string, init: { method?: string; headers?: Record<string, string> } = {}) => {
@@ -39,10 +69,17 @@ export function startTestDaemon(opts: { now: Date; env?: Record<string, string>;
     clock,
     calls,
     /** Makes one Run straight away, as `pnpm generate` does. */
-    generate: daemon.generate,
+    generate: (options: RunOptions) => daemon.generate(options),
     failures,
     pipelineSpend,
     request,
+    writeEnv,
+    /** Stops the Daemon and starts a new one on the same folders, clock and fakes, with `env` as its `.env`. */
+    async restart(env: Record<string, string>) {
+      await stopDaemon();
+      writeEnv(env);
+      daemon = startDaemon(env);
+    },
     /** The run.log in each Run's folder, oldest Run first. */
     runLogs(): string[] {
       const { outputDir } = config.paths;

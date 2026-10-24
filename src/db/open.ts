@@ -68,6 +68,33 @@ function initSchema(database: DatabaseSync): void {
       critic_summary TEXT NOT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- One row each time a condition starts; times are the Daemon's clock, as ISO strings.
+    CREATE TABLE IF NOT EXISTS alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      -- Stable per condition: while it lasts, the same key is the same Alert.
+      key TEXT NOT NULL,
+      -- What the Alert says now; a rule may change it while the Alert is active.
+      text TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      -- Missing while the Alert is active.
+      cleared_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS alerts_active_key ON alerts(key) WHERE cleared_at IS NULL;
+
+    -- Each push to the operator's phone, kept until it goes out.
+    CREATE TABLE IF NOT EXISTS pushes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alert_id INTEGER REFERENCES alerts(id),
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      -- When what it reports happened.
+      at TEXT NOT NULL,
+      -- Set once it has waited through Quiet hours; held pushes go out as one when they end.
+      held INTEGER NOT NULL DEFAULT 0,
+      -- Missing until it went out; a failed push is tried again at the next check.
+      sent_at TEXT
+    );
   `);
 
   const spendColumns = database.prepare('PRAGMA table_info(spend_log)').all() as { name: string }[];

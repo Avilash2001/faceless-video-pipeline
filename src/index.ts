@@ -7,6 +7,8 @@ import {
   evolveStrategyRules,
   syncCrossPlatformMetrics,
 } from './services/analyticsLoop.js';
+import { pingHealthcheck } from './services/healthcheck.js';
+import { sendToNtfy } from './services/ntfy.js';
 import { publishToPlatform } from './services/publisher.js';
 import { NicheCategory, RunOptions } from './types.js';
 
@@ -45,6 +47,8 @@ const adapters: Adapters = {
       await evolveStrategyRules();
     },
   },
+  notifier: { send: (push) => sendToNtfy(CONFIG.alerts, push) },
+  heartbeat: { ping: pingHealthcheck },
 };
 
 async function main() {
@@ -62,12 +66,13 @@ async function main() {
 
   const runOptions = parseRunOptions(args);
   // The daemon gives every Slot's Run the flags it was started with.
-  const daemon = createDaemon(CONFIG, adapters, runOptions);
+  const daemon = createDaemon(CONFIG, adapters, { slotOptions: runOptions });
 
   if (args.includes('--daemon')) {
     daemon.start();
     const { port } = await daemon.listen();
     console.log(`[Daemon] Schedules running; dashboard at http://localhost:${port}`);
+    if (!CONFIG.alerts.ntfyTopic) console.log('[Daemon] NTFY_TOPIC is not set: Alerts show on the dashboard only.');
     return;
   }
 
