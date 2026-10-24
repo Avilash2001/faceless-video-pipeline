@@ -1,2 +1,9 @@
 node_modules/
 .env
+# Generated renders (keep the folder itself)
+output/*
+!output/.gitkeep
+
+# Downloaded stock B-roll cache (keep the folder itself)
+assets/cache/*
+!assets/cache/.gitkeep
