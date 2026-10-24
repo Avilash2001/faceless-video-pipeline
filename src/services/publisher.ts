@@ -3,7 +3,7 @@ import path from 'path';
 import { google } from 'googleapis';
 import { request } from 'undici';
 import { CONFIG } from '../config.js';
-import { GeneratedVideoScript, PlatformUploadResult } from '../types.js';
+import { Storyboard, PlatformUploadResult } from '../types.js';
 
 /**
  * Publishes the rendered vertical MP4 concurrently to:
@@ -13,7 +13,7 @@ import { GeneratedVideoScript, PlatformUploadResult } from '../types.js';
  */
 export async function publishAcrossPlatforms(
   mp4Path: string,
-  script: GeneratedVideoScript
+  script: Storyboard
 ): Promise<PlatformUploadResult> {
   const result: PlatformUploadResult = { errors: [] };
 
@@ -44,11 +44,22 @@ export async function publishAcrossPlatforms(
   return result;
 }
 
+/** Appends the credit line and source links that every platform description carries. */
+function withCredits(text: string, script: Storyboard): string {
+  const sources = script.sourceUrls.length > 0 ? `\nSource: ${script.sourceUrls.join('\n')}` : '';
+  return `${text}\n\n${script.creditLine}${sources}`;
+}
+
 async function uploadToYouTubeShorts(
   mp4Path: string,
-  script: GeneratedVideoScript
+  script: Storyboard
 ): Promise<string | undefined> {
-  if (!CONFIG.youtube.clientId || !CONFIG.youtube.refreshToken) {
+  if (
+    !CONFIG.youtube.clientId ||
+    !CONFIG.youtube.refreshToken ||
+    CONFIG.youtube.clientId.includes('your_') ||
+    CONFIG.youtube.refreshToken.includes('your_')
+  ) {
     console.log('[Publisher] Skipping YouTube upload (credentials not configured).');
     return undefined;
   }
@@ -69,13 +80,16 @@ async function uploadToYouTubeShorts(
     requestBody: {
       snippet: {
         title: titleWithTag,
-        description: script.youtubeMetadata.description,
+        description: withCredits(script.youtubeMetadata.description, script),
         tags: script.youtubeMetadata.tags,
         categoryId: '27',
       },
       status: {
-        privacyStatus: 'public',
+        privacyStatus: CONFIG.youtube.privacy,
         selfDeclaredMadeForKids: false,
+        // Altered or synthetic content disclosure (AI visuals and voice). Not yet in the
+        // googleapis typings, hence the spread.
+        ...{ containsSyntheticMedia: true },
       },
     },
     media: {
@@ -88,7 +102,7 @@ async function uploadToYouTubeShorts(
 
 async function uploadToInstagramReels(
   mp4Path: string,
-  script: GeneratedVideoScript
+  script: Storyboard
 ): Promise<string | undefined> {
   const { accessToken, igBusinessId, publicVideoBaseUrl } = CONFIG.meta;
   if (
@@ -113,7 +127,7 @@ async function uploadToInstagramReels(
     body: JSON.stringify({
       media_type: 'REELS',
       video_url: publicVideoUrl,
-      caption: script.instagramMetadata.caption,
+      caption: `${script.instagramMetadata.caption}\n\n${script.creditLine}`,
       share_to_feed: true,
       access_token: accessToken,
     }),
@@ -170,7 +184,7 @@ async function uploadToInstagramReels(
 
 async function uploadToFacebookReels(
   mp4Path: string,
-  script: GeneratedVideoScript
+  script: Storyboard
 ): Promise<string | undefined> {
   const { accessToken, fbPageId } = CONFIG.meta;
   if (
@@ -220,7 +234,7 @@ async function uploadToFacebookReels(
       video_id: startData.video_id,
       upload_phase: 'finish',
       video_state: 'PUBLISHED',
-      description: `${script.facebookMetadata.title}\n\n${script.facebookMetadata.description}`,
+      description: withCredits(`${script.facebookMetadata.title}\n\n${script.facebookMetadata.description}`, script),
     }),
   });
   const finishData = (await finishRes.body.json()) as any;

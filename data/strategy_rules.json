@@ -1,39 +1,47 @@
 {
-  "version": 1,
+  "version": 2,
   "updatedAt": "2026-10-24T00:00:00.000Z",
   "explorationRate": 0.25,
   "targetDurationSeconds": {
-    "min": 32,
-    "max": 48
+    "min": 30,
+    "max": 50
   },
   "nicheWeights": {
-    "tech_ai_postmortems": 0.25,
-    "workplace_legal_drama": 0.25,
-    "finance_money_psychology": 0.20,
-    "cybersecurity_scam_breakdowns": 0.15,
-    "weird_history_mysteries": 0.15
+    "reddit_revenge": 0.14,
+    "reddit_aita": 0.1,
+    "reddit_entitled": 0.1,
+    "reddit_workplace": 0.06,
+    "reddit_updates": 0.06,
+    "true_heists_cons": 0.12,
+    "true_vanished_unsolved": 0.1,
+    "true_survival": 0.08,
+    "true_business_blunders": 0.06,
+    "fiction_drama": 0.08,
+    "fiction_confessions": 0.1
   },
   "hookArchetypeWeights": {
-    "shocking_mistake": 0.30,
-    "hidden_rule_exploit": 0.25,
-    "instant_karma_twist": 0.25,
-    "counterintuitive_fact": 0.20
+    "cold_open_climax": 0.3,
+    "shocking_confession": 0.2,
+    "impossible_question": 0.2,
+    "stakes_reveal": 0.15,
+    "twist_tease": 0.15
   },
-  "voicePool": [
-    "en-US-AndrewNeural",
-    "en-US-BrianNeural",
-    "en-US-ChristopherNeural"
-  ],
-  "voiceSpeedRate": "+12%",
+  "voicePool": {
+    "male": ["en-US-AndrewNeural", "en-US-BrianNeural", "en-US-ChristopherNeural"],
+    "female": ["en-US-AvaNeural", "en-US-EmmaNeural", "en-US-JennyNeural"]
+  },
+  "voiceSpeedRate": "+10%",
   "doRules": [
-    "Open with a high-stakes conflict or specific number in the first 2.5 seconds (under 12 words).",
-    "Combine the core story with 1-2 sharp analytical takeaways so the script is 100% transformative.",
-    "Switch visual B-roll keywords every 4 to 5 seconds to reset viewer attention.",
-    "Make the final sentence flow grammatically into the first word of the hook for a seamless loop."
+    "Open on the most surprising concrete moment of the story in 10 words or fewer.",
+    "Give the story a full arc: setup, complication, a mid-point reversal, the turn, then the payoff.",
+    "Hold the answer to the hook's question until the final 20% of the narration.",
+    "Make every sentence something that can be shown on screen: a person doing something somewhere.",
+    "End with a line that flows naturally back into the first line of the hook."
   ],
   "dontRules": [
-    "Never start with 'Today we are talking about' or 'A user on Reddit posted'.",
-    "Avoid passive voice or sentences longer than 18 words.",
-    "Do not give away the final resolution before the last 5 seconds."
+    "Never open with a greeting, 'Did you know', 'Today we', or 'A user on Reddit posted'.",
+    "Never read or closely paraphrase the source text; retell it in fresh words.",
+    "Never invent facts for true stories, and never ask viewers to like or subscribe.",
+    "Avoid sentences longer than 16 words, passive voice, and abstract commentary."
   ]
 }

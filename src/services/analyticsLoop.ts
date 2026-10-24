@@ -1,15 +1,12 @@
 import fs from 'fs';
 import { google } from 'googleapis';
-import { GoogleGenAI, Type } from '@google/genai';
+import { Type } from '@google/genai';
 import { request } from 'undici';
 import { CONFIG } from '../config.js';
 import { db } from '../db/index.js';
 import { StrategyRules } from '../types.js';
+import { generateContentWithFallback } from './gemini.js';
 
-const ai = new GoogleGenAI({
-  apiKey: CONFIG.gemini.apiKey,
-  httpOptions: { retryOptions: { attempts: 5, initialDelay: 2 } },
-});
 
 /**
  * 1. Pulls 48h+ telemetry across YouTube Analytics API, Instagram Graph Insights,
@@ -144,71 +141,37 @@ BOTTOM PERFORMING VIDEOS (HIGH SWIPE-AWAY / LOW RETENTION):
 ${JSON.stringify(bottomPerformers, null, 2)}
 
 TASK:
-1. Re-weight "nicheWeights" (must sum to 1.0, keep every niche >= 0.08 so exploration continues).
+1. Re-weight "nicheWeights" (must sum to 1.0, keep every genre >= 0.04 so exploration continues).
 2. Re-weight "hookArchetypeWeights" (must sum to 1.0) toward the hooks that achieved the highest average watch percentage.
 3. Adjust "targetDurationSeconds" toward the duration sweet spot of the top performers.
 4. Synthesize 4 concrete "doRules" and 3 "dontRules" based on structural differences between the winning scripts and losing scripts.`;
 
-  const response = await ai.models.generateContent({
-    model: CONFIG.gemini.model,
+  const response = await generateContentWithFallback({
     contents: prompt,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        required: [
-          'targetDurationSeconds',
-          'nicheWeights',
-          'hookArchetypeWeights',
-          'doRules',
-          'dontRules',
-          'criticSummary',
-        ],
-        properties: {
-          targetDurationSeconds: {
-            type: Type.OBJECT,
-            required: ['min', 'max'],
-            properties: {
-              min: { type: Type.INTEGER },
-              max: { type: Type.INTEGER },
-            },
+    responseSchema: {
+      type: Type.OBJECT,
+      required: [
+        'targetDurationSeconds',
+        'nicheWeights',
+        'hookArchetypeWeights',
+        'doRules',
+        'dontRules',
+        'criticSummary',
+      ],
+      properties: {
+        targetDurationSeconds: {
+          type: Type.OBJECT,
+          required: ['min', 'max'],
+          properties: {
+            min: { type: Type.INTEGER },
+            max: { type: Type.INTEGER },
           },
-          nicheWeights: {
-            type: Type.OBJECT,
-            required: [
-              'tech_ai_postmortems',
-              'workplace_legal_drama',
-              'finance_money_psychology',
-              'cybersecurity_scam_breakdowns',
-              'weird_history_mysteries',
-            ],
-            properties: {
-              tech_ai_postmortems: { type: Type.NUMBER },
-              workplace_legal_drama: { type: Type.NUMBER },
-              finance_money_psychology: { type: Type.NUMBER },
-              cybersecurity_scam_breakdowns: { type: Type.NUMBER },
-              weird_history_mysteries: { type: Type.NUMBER },
-            },
-          },
-          hookArchetypeWeights: {
-            type: Type.OBJECT,
-            required: [
-              'shocking_mistake',
-              'hidden_rule_exploit',
-              'instant_karma_twist',
-              'counterintuitive_fact',
-            ],
-            properties: {
-              shocking_mistake: { type: Type.NUMBER },
-              hidden_rule_exploit: { type: Type.NUMBER },
-              instant_karma_twist: { type: Type.NUMBER },
-              counterintuitive_fact: { type: Type.NUMBER },
-            },
-          },
-          doRules: { type: Type.ARRAY, items: { type: Type.STRING } },
-          dontRules: { type: Type.ARRAY, items: { type: Type.STRING } },
-          criticSummary: { type: Type.STRING },
         },
+        nicheWeights: weightsSchema(Object.keys(currentRules.nicheWeights)),
+        hookArchetypeWeights: weightsSchema(Object.keys(currentRules.hookArchetypeWeights)),
+        doRules: { type: Type.ARRAY, items: { type: Type.STRING } },
+        dontRules: { type: Type.ARRAY, items: { type: Type.STRING } },
+        criticSummary: { type: Type.STRING },
       },
     },
   });
@@ -317,4 +280,13 @@ async function fetchFacebookMetrics(videoId: string, durationSec: number) {
   } catch {
     return null;
   }
+}
+
+/** JSON schema for a weights object whose keys come from the current strategy file. */
+function weightsSchema(keys: string[]) {
+  return {
+    type: Type.OBJECT,
+    required: keys,
+    properties: Object.fromEntries(keys.map((k) => [k, { type: Type.NUMBER }])),
+  };
 }

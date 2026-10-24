@@ -1,144 +1,168 @@
-import { GoogleGenAI, Type } from '@google/genai';
-import { CONFIG } from '../config.js';
-import {
-  GeneratedVideoScript,
-  HookArchetype,
-  RawTrendCandidate,
-  StrategyRules,
-} from '../types.js';
-import { pickWeightedKey } from './trendFinder.js';
+import { Type } from '@google/genai';
+import { GENRES, VISUAL_STYLES } from '../genres.js';
+import { pickRandom, pickWeightedKey } from '../sources/util.js';
+import { HookArchetype, StoryBrief, Storyboard, StrategyRules } from '../types.js';
+import { generateContentWithFallback } from './gemini.js';
 
-// Gemini returns transient 503 "high demand" errors; the SDK's built-in backoff retries them (2s, 4s, 8s, 16s).
-const ai = new GoogleGenAI({
-  apiKey: CONFIG.gemini.apiKey,
-  httpOptions: { retryOptions: { attempts: 5, initialDelay: 2 } },
-});
+const HOOK_GUIDES: Record<HookArchetype, string> = {
+  cold_open_climax: 'Drop the viewer into the most dramatic moment, then rewind ("Three weeks earlier...").',
+  shocking_confession: 'Open with a blunt first-person confession that demands an explanation.',
+  impossible_question: 'Open with a question that sounds impossible but the story answers.',
+  stakes_reveal: 'Open by stating exactly what was at stake and how close it came to being lost.',
+  twist_tease: 'Open by promising a specific twist without revealing it.',
+};
+
+// Edge TTS at roughly +10% speaks ~2.7 words per second.
+const WORDS_PER_SECOND = 2.7;
 
 /**
- * Transforms a raw trending story + top community reactions into a high-retention,
- * monetizable vertical video script with per-segment visual B-roll cues and
- * platform-tailored metadata for YouTube Shorts, Instagram Reels, and Facebook Reels.
+ * Turns a story brief into a narrated storyboard: one short narration line per scene, each
+ * with a concrete visual prompt, camera move and SFX cue, plus a consistent cast and art style.
  */
-export async function generateTransformativeScript(
-  candidate: RawTrendCandidate,
+export async function generateStoryboard(
+  brief: StoryBrief,
   strategy: StrategyRules
-): Promise<GeneratedVideoScript> {
-  const chosenHook = pickWeightedKey(
-    strategy.hookArchetypeWeights,
-    strategy.explorationRate
-  ) as HookArchetype;
+): Promise<Storyboard> {
+  const niche = brief.candidate.niche;
+  const genre = GENRES[niche];
+  const isFiction = genre.source === 'fiction';
+  const hook = pickWeightedKey(strategy.hookArchetypeWeights, strategy.explorationRate);
+  const styleName = pickRandom(genre.styles);
+  const minWords = Math.round(strategy.targetDurationSeconds.min * WORDS_PER_SECOND);
+  const maxWords = Math.round(strategy.targetDurationSeconds.max * WORDS_PER_SECOND);
 
-  const systemPrompt = `You are an elite Short-Form Viral Video Producer & Scriptwriter for YouTube Shorts, Instagram Reels, and Facebook Reels.
-Your goal is to transform raw source stories and community reactions into 100% original, high-retention analytical storytelling that passes YouTube Partner Program & Meta Original Content checks.
+  const sourceRules =
+    genre.source === 'reddit'
+      ? `- This is adapted from ${brief.candidate.sourceLabel}. Retell it as an ORIGINAL first-person story in your own words: change every name and identifying detail, condense, never reuse the author's sentences.`
+      : genre.source === 'wikipedia'
+        ? `- This is a TRUE documented story. Use only the facts in the brief. Never invent names, numbers, dialogue or events. Third person.`
+        : `- This is ORIGINAL FICTION. Never imply it is real or that it came from Reddit.`;
 
-CURRENT SELF-LEARNED STRATEGY RULES (Version ${strategy.version}):
-- Target Duration: ${strategy.targetDurationSeconds.min} to ${strategy.targetDurationSeconds.max} seconds (~95 to 135 spoken words total).
-- Assigned Hook Archetype: "${chosenHook}"
-- DO RULES:
+  const systemInstruction = `You are an elite short-form story writer and storyboard artist. You write narrated stories for vertical video that people watch to the end and replay.
+
+STRATEGY (v${strategy.version}):
+- Length: ${minWords}-${maxWords} spoken words in total.
+- Hook archetype "${hook}": ${HOOK_GUIDES[hook]}
+- DO:
 ${strategy.doRules.map((r) => `  * ${r}`).join('\n')}
-- DONT RULES:
+- DON'T:
 ${strategy.dontRules.map((r) => `  * ${r}`).join('\n')}
+${sourceRules}
 
-CRITICAL PACING REQUIREMENTS:
-1. "hookText": Must be under 13 words, spoken in the first 2.5 seconds, creating an immediate curiosity gap.
-2. "segments": Break the body into 6 to 8 fast-paced segments (each 12 to 18 words, ~4-5 seconds).
-3. Every segment MUST include a concrete 2-4 word "pexelsSearchQuery" for vertical stock B-roll (e.g., "server room red lights", "stressed office worker laptop", "stock market crash screen", "courtroom gavel").
-4. Synthesize the original incident WITH the twist or community insight so it adds clear educational/commentary value.
-5. "loopBridgeText": A short final clause (4-8 words) that flows seamlessly back into the very first word of "hookText".`;
+NARRATION:
+- Narrator: ${brief.narratorPov.replace('_', ' ')}, ${brief.narratorGender}, tone "${brief.tone}".
+- 9 to 14 scenes. Each scene's "narration" is ONE short line (5-14 words) that gets its own image, so the visual changes every 2-4 seconds.
+- Scene 1 is the hook: 10 words or fewer.
+- Build: setup, complication, a reversal around the middle, the turn, then the payoff in the last 20%.
+- The final scene resolves the hook and its last words flow naturally back into scene 1.
+- Plain spoken English. No emojis, hashtags, stage directions or speaker labels in narration.
+- Narration uses names or pronouns, NEVER character ids like "C1" (ids are only for visual prompts).
 
-  const userPrompt = `SOURCE NICHE: ${candidate.niche}
-SOURCE TITLE: ${candidate.title}
-SOURCE BODY:
-${candidate.bodyText}
+VISUALS (art style "${styleName}": ${VISUAL_STYLES[styleName]}):
+- "visualPrompt": a concrete single frame showing exactly what that line describes: subject + action + setting + shot type + lighting + mood, with the subject in the upper two-thirds (captions sit at the bottom). Don't restate the art style or aspect ratio; they're added automatically.
+- Refer to recurring people ONLY by their character id (e.g. "C1 slams the door") and list them in "characterIds"; their appearance is injected automatically.
+- Never ask for text, letters, signs, logos, watermarks or UI in the image.
+- ${isFiction || genre.source === 'reddit' ? 'Characters are invented people.' : 'Real people are depicted as stylized illustrations, never photorealistic likenesses.'}
+- "characters": 1-3 recurring people with a fixed visual description (age, build, hair, skin tone, clothing, one distinctive detail).
+- "camera": vary it; use push_in for tension, pull_out for reveals, pans for movement.
+- "sfx": whoosh on a location or time jump, impact on the reversal, riser just before the twist, otherwise none.
+- Mark exactly 2 scenes as "motionCandidate": the hook and the climax. Their "motionPrompt" describes the motion for an image-to-video model (subject movement + camera move, 1 sentence). Other scenes: motionCandidate false and motionPrompt "".
+- "hookOverlayText": 3-6 punchy words shown over the first frame (no question marks needed, no emojis).
 
-TOP COMMUNITY REACTIONS / INSIGHTS:
-${candidate.topComments.map((c, i) => `[Comment ${i + 1}]: ${c}`).join('\n\n')}`;
+METADATA:
+- YouTube title under 70 characters that creates curiosity without lying. Description: 2 short sentences, no hashtags (sources are appended automatically). 5-10 tags.
+- Instagram caption with at most 5 hashtags. "firstCommentPrompt": a debate question for the comments.
+- Facebook title and 1-2 sentence description.`;
 
-  const response = await ai.models.generateContent({
-    model: CONFIG.gemini.model,
+  const userPrompt = `STORY BRIEF
+Premise: ${brief.premise}
+Beats:
+${brief.beats.map((b, i) => `${i + 1}. ${b}`).join('\n')}
+Twist: ${brief.twist}
+Ending: ${brief.ending}`;
+
+  const response = await generateContentWithFallback({
     contents: userPrompt,
-    config: {
-      systemInstruction: systemPrompt,
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        required: [
-          'titleCardBadge',
-          'titleCardHeadline',
-          'hookText',
-          'segments',
-          'loopBridgeText',
-          'youtubeMetadata',
-          'instagramMetadata',
-          'facebookMetadata',
-        ],
-        properties: {
-          titleCardBadge: {
-            type: Type.STRING,
-            description: 'Short uppercase category badge (2-3 words, e.g. TECH POST-MORTEM)',
-          },
-          titleCardHeadline: {
-            type: Type.STRING,
-            description: 'Punchy 6-9 word headline for the opening 2.5s visual card',
-          },
-          hookText: {
-            type: Type.STRING,
-            description: 'First 2.5 seconds spoken hook (max 13 words)',
-          },
-          segments: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              required: [
-                'segmentIndex',
-                'spokenText',
-                'onScreenHeadline',
-                'pexelsSearchQuery',
-                'sfxCue',
-              ],
-              properties: {
-                segmentIndex: { type: Type.INTEGER },
-                spokenText: { type: Type.STRING },
-                onScreenHeadline: { type: Type.STRING },
-                pexelsSearchQuery: { type: Type.STRING },
-                sfxCue: {
-                  type: Type.STRING,
-                  enum: ['whoosh', 'pop', 'riser', 'none'],
-                },
-              },
+    systemInstruction,
+    responseSchema: {
+      type: Type.OBJECT,
+      required: [
+        'hookOverlayText',
+        'characters',
+        'scenes',
+        'youtubeMetadata',
+        'instagramMetadata',
+        'facebookMetadata',
+      ],
+      properties: {
+        hookOverlayText: { type: Type.STRING },
+        characters: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            required: ['id', 'name', 'appearance'],
+            properties: {
+              id: { type: Type.STRING, description: 'C1, C2, C3' },
+              name: { type: Type.STRING },
+              appearance: { type: Type.STRING },
             },
           },
-          loopBridgeText: {
-            type: Type.STRING,
-            description: 'Final 4-8 words that grammatically connect back to hookText',
-          },
-          youtubeMetadata: {
+        },
+        scenes: {
+          type: Type.ARRAY,
+          items: {
             type: Type.OBJECT,
-            required: ['title', 'description', 'tags'],
+            required: [
+              'narration',
+              'visualPrompt',
+              'stockQuery',
+              'characterIds',
+              'camera',
+              'sfx',
+              'motionCandidate',
+              'motionPrompt',
+            ],
             properties: {
-              title: { type: Type.STRING },
-              description: { type: Type.STRING },
-              tags: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-          },
-          instagramMetadata: {
-            type: Type.OBJECT,
-            required: ['caption', 'firstCommentPrompt'],
-            properties: {
-              caption: { type: Type.STRING },
-              firstCommentPrompt: {
+              narration: { type: Type.STRING },
+              visualPrompt: { type: Type.STRING },
+              stockQuery: {
                 type: Type.STRING,
-                description: 'A polarizing question to pin in comments to boost IG algorithm',
+                description: '2-4 word stock footage search, e.g. "bank vault door"',
               },
+              characterIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+              camera: {
+                type: Type.STRING,
+                enum: ['push_in', 'pull_out', 'pan_left', 'pan_right', 'pan_up', 'pan_down'],
+              },
+              sfx: { type: Type.STRING, enum: ['whoosh', 'impact', 'riser', 'none'] },
+              motionCandidate: { type: Type.BOOLEAN },
+              motionPrompt: { type: Type.STRING },
             },
           },
-          facebookMetadata: {
-            type: Type.OBJECT,
-            required: ['title', 'description'],
-            properties: {
-              title: { type: Type.STRING },
-              description: { type: Type.STRING },
-            },
+        },
+        youtubeMetadata: {
+          type: Type.OBJECT,
+          required: ['title', 'description', 'tags'],
+          properties: {
+            title: { type: Type.STRING },
+            description: { type: Type.STRING },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+        },
+        instagramMetadata: {
+          type: Type.OBJECT,
+          required: ['caption', 'firstCommentPrompt'],
+          properties: {
+            caption: { type: Type.STRING },
+            firstCommentPrompt: { type: Type.STRING },
+          },
+        },
+        facebookMetadata: {
+          type: Type.OBJECT,
+          required: ['title', 'description'],
+          properties: {
+            title: { type: Type.STRING },
+            description: { type: Type.STRING },
           },
         },
       },
@@ -146,21 +170,31 @@ ${candidate.topComments.map((c, i) => `[Comment ${i + 1}]: ${c}`).join('\n\n')}`
   });
 
   const parsed = JSON.parse(response.text || '{}');
-  const fullNarrationText = [
-    parsed.hookText,
-    ...parsed.segments.map((s: any) => s.spokenText),
-    parsed.loopBridgeText,
-  ].join(' ');
+  const scenes = (parsed.scenes || []).map((s: any, index: number) => ({ ...s, index }));
+  if (scenes.length < 3) {
+    throw new Error(`Storyboard came back with ${scenes.length} scenes; expected 9-14.`);
+  }
+
+  const sourceUrls = brief.candidate.sourceUrl ? [brief.candidate.sourceUrl] : [];
+  const creditLine = isFiction
+    ? 'An original story. All characters and events are fictional.'
+    : genre.source === 'reddit'
+      ? `Inspired by ${brief.candidate.sourceLabel}. Names and details changed.`
+      : `Based on documented events. Source: ${brief.candidate.sourceLabel}.`;
 
   return {
-    niche: candidate.niche,
-    hookArchetype: chosenHook,
-    titleCardBadge: parsed.titleCardBadge,
-    titleCardHeadline: parsed.titleCardHeadline,
-    hookText: parsed.hookText,
-    segments: parsed.segments,
-    loopBridgeText: parsed.loopBridgeText,
-    fullNarrationText,
+    niche,
+    hookArchetype: hook,
+    isFiction,
+    sourceUrls,
+    creditLine,
+    hookOverlayText: parsed.hookOverlayText,
+    visualStyle: { name: styleName, prompt: VISUAL_STYLES[styleName] },
+    characters: parsed.characters || [],
+    scenes,
+    musicMood: brief.musicMood,
+    narratorGender: brief.narratorGender,
+    fullNarrationText: scenes.map((s: any) => s.narration).join(' '),
     youtubeMetadata: parsed.youtubeMetadata,
     instagramMetadata: parsed.instagramMetadata,
     facebookMetadata: parsed.facebookMetadata,

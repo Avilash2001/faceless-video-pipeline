@@ -2,10 +2,14 @@ import fs from 'fs';
 import path from 'path';
 import { WordTiming } from '../types.js';
 
+// Active-word highlight colours (ASS &HBBGGRR&): gold, cyan, lime, hot pink. Rotated per
+// video so consecutive uploads don't look templated.
+const HIGHLIGHT_COLOURS = ['&H0000EAFF&', '&H00FFE100&', '&H0000FF9D&', '&H00B469FF&'];
+
 /**
  * Generates an Advanced SubStation Alpha (.ass) subtitle file with:
- * 1. Opening Title Banner (0.0s - 2.8s) in the top safe zone (MarginV=260)
- * 2. 3-word pop-in karaoke chunks with active-word gold highlight (#00EAFF in BGR),
+ * 1. A hook overlay (0.0s - 2.6s): 3-6 big words over the first frame, upper third.
+ * 2. 3-word pop-in karaoke chunks with a rotating active-word highlight colour,
  *    thick black stroke outline, and vertical safe-zone positioning (MarginV=460)
  *    so captions sit cleanly above YT Shorts, IG Reels, and FB Reels UI overlays.
  */
@@ -13,10 +17,10 @@ export function buildAssSubtitles(
   wordTimings: WordTiming[],
   outputDir: string,
   filePrefix: string,
-  badgeText?: string,
-  headlineText?: string
+  hookOverlayText?: string
 ): string {
   const assPath = path.join(outputDir, `${filePrefix}_captions.ass`);
+  const highlight = HIGHLIGHT_COLOURS[Math.floor(Math.random() * HIGHLIGHT_COLOURS.length)];
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -28,8 +32,7 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: KaraokePop,Arial Black,78,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,1,7,3,2,80,80,460,1
-Style: TopBadge,Arial Black,40,&H0000EAFF,&H0000EAFF,&H00000000,&HAA000000,-1,0,0,0,100,100,2,0,3,14,0,8,90,90,230,1
-Style: TopHeadline,Arial Black,54,&H00FFFFFF,&H00FFFFFF,&H00000000,&HAA000000,-1,0,0,0,100,100,0,0,1,6,3,8,90,90,310,1
+Style: HookOverlay,Arial Black,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H99000000,-1,0,0,0,100,100,1,0,1,9,4,8,70,70,330,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -37,14 +40,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const events: string[] = [];
 
-  if (badgeText) {
+  if (hookOverlayText) {
     events.push(
-      `Dialogue: 1,0:00:00.00,0:00:02.80,TopBadge,,0,0,0,,{\\fad(120,180)}${sanitizeAssText(badgeText.toUpperCase())}`
-    );
-  }
-  if (headlineText) {
-    events.push(
-      `Dialogue: 1,0:00:00.00,0:00:02.80,TopHeadline,,0,0,0,,{\\fad(120,180)}${sanitizeAssText(headlineText)}`
+      `Dialogue: 1,0:00:00.00,0:00:02.60,HookOverlay,,0,0,0,,{\\fad(0,200)\\fscx112\\fscy112\\t(0,180,\\fscx100\\fscy100)}${sanitizeAssText(hookOverlayText.toUpperCase())}`
     );
   }
 
@@ -67,7 +65,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         .map((w, idx) => {
           const clean = sanitizeAssText(w.word.toUpperCase());
           if (idx === activeIdx) {
-            return `{\\c&H0000EAFF&\\fscx108\\fscy108}${clean}{\\c&H00FFFFFF&\\fscx100\\fscy100}`;
+            return `{\\c${highlight}\\fscx108\\fscy108}${clean}{\\c&H00FFFFFF&\\fscx100\\fscy100}`;
           }
           return clean;
         })

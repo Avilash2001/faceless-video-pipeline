@@ -64,3 +64,19 @@ export function isSourceAlreadyProcessed(externalId: string): boolean {
     .get(externalId);
   return Boolean(row);
 }
+
+/** YouTube titles of the most recent videos, so new stories avoid repeating them. */
+export function getRecentStoryTitles(limit: number): string[] {
+  const rows = db
+    .prepare('SELECT script_json FROM videos ORDER BY id DESC LIMIT ?')
+    .all(limit) as { script_json: string }[];
+  return rows
+    .map((r) => {
+      try {
+        return JSON.parse(r.script_json)?.youtubeMetadata?.title as string | undefined;
+      } catch {
+        return undefined;
+      }
+    })
+    .filter((t): t is string => Boolean(t));
+}
