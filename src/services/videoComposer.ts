@@ -13,6 +13,22 @@ export interface ComposeVideoOptions {
 }
 
 /**
+ * Fails fast with a fix-it message when ffmpeg can't burn in .ass subtitles.
+ * Homebrew's core `ffmpeg` formula is built without libass; `ffmpeg-full` has it.
+ */
+async function assertLibassAvailable(): Promise<void> {
+  const filters = await new Promise<ffmpeg.Filters>((resolve, reject) =>
+    ffmpeg.getAvailableFilters((err, available) => (err ? reject(err) : resolve(available)))
+  );
+  if (!filters.ass) {
+    throw new Error(
+      'Your ffmpeg build has no libass ("ass" filter), which is required to burn in karaoke subtitles. ' +
+        'On macOS: `brew install ffmpeg-full`, then set FFMPEG_PATH=/opt/homebrew/opt/ffmpeg-full/bin/ffmpeg in .env.'
+    );
+  }
+}
+
+/**
  * Stitches vertical B-roll segments, applies contrast/vignette grading so text pops,
  * burns in the .ass karaoke subtitles, overlays the Satori title card for t=0..2.6s,
  * and encodes a 1080x1920 30fps H.264/AAC MP4 ready for YT Shorts, IG Reels, and FB Reels.
@@ -20,6 +36,7 @@ export interface ComposeVideoOptions {
 export async function composeFinalShortMp4(
   opts: ComposeVideoOptions
 ): Promise<string> {
+  await assertLibassAvailable();
   fs.mkdirSync(opts.outputDir, { recursive: true });
   const finalMp4Path = path.join(opts.outputDir, `${opts.filePrefix}_final.mp4`);
 

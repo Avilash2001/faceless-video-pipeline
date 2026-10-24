@@ -2,6 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import { WordTiming } from '../types.js';
+import { useEdgeTtsV2Auth } from './edgeTtsAuth.js';
+
+useEdgeTtsV2Auth();
 
 export interface TTSResult {
   audioFilePath: string;
@@ -26,7 +29,8 @@ export async function synthesizeSpeechWithTimings(
   const tts = new MsEdgeTTS();
   await tts.setMetadata(
     voiceName,
-    OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3
+    OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3,
+    { wordBoundaryEnabled: true }
   );
 
   const wordTimings: WordTiming[] = [];

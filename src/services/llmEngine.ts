@@ -8,7 +8,11 @@ import {
 } from '../types.js';
 import { pickWeightedKey } from './trendFinder.js';
 
-const ai = new GoogleGenAI({ apiKey: CONFIG.gemini.apiKey });
+// Gemini returns transient 503 "high demand" errors; the SDK's built-in backoff retries them (2s, 4s, 8s, 16s).
+const ai = new GoogleGenAI({
+  apiKey: CONFIG.gemini.apiKey,
+  httpOptions: { retryOptions: { attempts: 5, initialDelay: 2 } },
+});
 
 /**
  * Transforms a raw trending story + top community reactions into a high-retention,

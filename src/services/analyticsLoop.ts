@@ -6,7 +6,10 @@ import { CONFIG } from '../config.js';
 import { db } from '../db/index.js';
 import { StrategyRules } from '../types.js';
 
-const ai = new GoogleGenAI({ apiKey: CONFIG.gemini.apiKey });
+const ai = new GoogleGenAI({
+  apiKey: CONFIG.gemini.apiKey,
+  httpOptions: { retryOptions: { attempts: 5, initialDelay: 2 } },
+});
 
 /**
  * 1. Pulls 48h+ telemetry across YouTube Analytics API, Instagram Graph Insights,

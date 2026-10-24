@@ -29,7 +29,9 @@ A zero-bloat, closed-loop content factory built for **YouTube Shorts**, **Instag
 ## Quick Start
 
 ```bash
-# 1. Install dependencies (ensure ffmpeg is installed on your Mac: brew install ffmpeg)
+# 1. Install dependencies. ffmpeg must include libass for subtitle burn-in;
+#    Homebrew's plain `ffmpeg` doesn't, so on a Mac: brew install ffmpeg-full
+#    (keg-only — keep FFMPEG_PATH from .env.example pointing at it)
 npm install
 
 # 2. Copy and configure environment variables
