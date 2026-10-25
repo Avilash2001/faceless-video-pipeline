@@ -37,28 +37,49 @@ export function fakeAdapters(clock: FakeClock, config: Config, { underPm2 = true
   /** What each fake Run spends on paid Providers, taken in order; a Run spends nothing once it runs out. */
   const pipelineSpend: number[] = [];
   let runs = 0;
+  let hold: { step: number; until: Promise<void> } | undefined;
+
+  /**
+   * Holds the next Pipeline run once it has started `step`, leaving its Run in progress until
+   * `release` is called. `release` resolves once the work it lets go on has finished.
+   */
+  function holdPipeline(step: number) {
+    let resume = () => {};
+    hold = { step, until: new Promise<void>((resolve) => (resume = resolve)) };
+    return {
+      async release() {
+        resume();
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      },
+    };
+  }
 
   /** Goes through the Pipeline's steps as the real one does, making a Run folder with a stand-in Video. */
   async function runPipeline(options: RunOptions, progress: RunProgress): Promise<PipelineResult> {
-    const step = (n: number, message: string) => {
+    const step = async (n: number, message: string) => {
       progress.step(n, message);
+      if (hold?.step === n) {
+        const { until } = hold;
+        hold = undefined;
+        await until;
+      }
       if (failures.pipeline && n === (failures.pipelineStep ?? 1)) throw failures.pipeline;
     };
-    step(1, 'Finding story candidates...');
-    step(2, 'Choosing and briefing the story...');
-    step(3, 'Writing the storyboard...');
+    await step(1, 'Finding story candidates...');
+    await step(2, 'Choosing and briefing the story...');
+    await step(3, 'Writing the storyboard...');
     const runDir = path.join(config.paths.outputDir, `${clock.now().getTime()}_${fakeStory.candidate.externalId}_${++runs}`);
     fs.mkdirSync(runDir, { recursive: true });
     fs.writeFileSync(path.join(runDir, 'storyboard.json'), JSON.stringify({ brief: fakeStory, storyboard: fakeStoryboard }));
-    progress.folder(runDir);
+    progress.storyboarded({ folder: runDir, story: fakeStory, storyboard: fakeStoryboard });
     const storyboarded = { story: fakeStory, storyboard: fakeStoryboard, strategyVersion: 1 };
     if (options.storyboardOnly) return storyboarded;
 
-    step(4, 'Synthesizing voiceover...');
-    step(5, 'Generating scene visuals...');
+    await step(4, 'Synthesizing voiceover...');
+    await step(5, 'Generating scene visuals...');
     const spend = pipelineSpend.shift();
     if (spend) currentRun()?.spend('image:fake', spend);
-    step(6, 'Rendering 1080x1920 MP4...');
+    await step(6, 'Rendering 1080x1920 MP4...');
     const videoPath = path.join(runDir, `${path.basename(runDir)}_final.mp4`);
     fs.writeFileSync(videoPath, 'not really an mp4');
     return { ...storyboarded, video: { path: videoPath, durationSec: 42, voiceName: 'en-US-GuyNeural' } };
@@ -109,5 +130,5 @@ export function fakeAdapters(clock: FakeClock, config: Config, { underPm2 = true
       },
     },
   };
-  return { adapters, calls, failures, pipelineSpend };
+  return { adapters, calls, failures, holdPipeline, pipelineSpend };
 }

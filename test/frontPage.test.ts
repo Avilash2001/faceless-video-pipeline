@@ -31,4 +31,33 @@ describe('front page', () => {
     expect(page).toContain('Metrics sync Mon 26 Oct 03:30');
     expect(page).toContain('Evolve Wed 28 Oct 04:00');
   });
+
+  it('shows the 5 most recent Runs, newest first, with their outcome, Genre, title, length and cost', async () => {
+    const { clock, generate, pipelineSpend, pageText } = startTestDaemon({ now: SUNDAY_10AM });
+    pipelineSpend.push(0, 0, 0, 0, 0.12);
+
+    for (let minute = 1; minute <= 5; minute++) {
+      await generate({});
+      await clock.advanceTo(new Date(`2026-10-25T10:0${minute}`));
+    }
+    await generate({ storyboardOnly: true });
+
+    const page = await pageText('/');
+    expect(page).toContain(
+      'Recent Runs ' +
+        'Sun 25 Oct 10:05 storyboard only true_heists_cons · They beat the vault · $0.00 ' +
+        'Sun 25 Oct 10:04 rendered true_heists_cons · They beat the vault · 42 s · $0.12 ' +
+        'Sun 25 Oct 10:03 rendered'
+    );
+    expect(page).toContain('Sun 25 Oct 10:01 rendered true_heists_cons · They beat the vault · 42 s · $0.00 All Runs');
+    expect(page).not.toContain('Sun 25 Oct 10:00 rendered');
+  });
+
+  it('has a Run now button that posts Run now', async () => {
+    const { request } = startTestDaemon({ now: SUNDAY_10AM });
+
+    const page = await (await request('/')).text();
+
+    expect(page).toMatch(/<form method="post" action="\/actions\/run-now">\s*<button>Run now<\/button>/);
+  });
 });

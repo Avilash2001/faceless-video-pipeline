@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { CONFIG, ImageProviderName, MotionProviderName } from '../config.js';
 import { formatCost, recordSpend, todaysSpendUsd, withinBudget } from '../services/costs.js';
+import { OverBudgetError } from '../spend.js';
 import { SceneMedia, Storyboard, TimedScene } from '../types.js';
 import { comfyImageProvider } from './images/comfyui.js';
 import { falImageProvider } from './images/fal.js';
@@ -89,7 +90,7 @@ export async function generateSceneMedia(
       console.warn(`[Visuals] ${budgetNote}. Using comfyui instead.`);
       primary = fallback;
     } else {
-      throw new Error(`Daily budget reached: ${budgetNote}. Skipping this video; raise DAILY_BUDGET_USD or set IMAGE_FALLBACK=comfyui.`);
+      throw new OverBudgetError(`Daily budget reached: ${budgetNote}. Skipping this video; raise DAILY_BUDGET_USD or set IMAGE_FALLBACK=comfyui.`);
     }
   }
   const needsSheet = primary.supportsRefs && hasCast;
@@ -115,6 +116,8 @@ export async function generateSceneMedia(
   }
 
   const shotResults = new Map<number, SceneMedia | null>();
+  /** Set once a shot went without because the Daily budget couldn't cover it. */
+  let overBudget = false;
   await mapPool(shots, CONFIG.visuals.concurrency, async (scene) => {
     const outBase = path.join(dir, `scene_${String(scene.index).padStart(2, '0')}`);
     for (const [provider, attempts] of [
@@ -132,7 +135,10 @@ export async function generateSceneMedia(
         stockQuery: scene.stockQuery,
       };
       for (let attempt = 1; attempt <= attempts && !disabled.has(provider.name); attempt++) {
-        if (provider.costPerImageUsd > 0 && !withinBudget(provider.costPerImageUsd)) break;
+        if (provider.costPerImageUsd > 0 && !withinBudget(provider.costPerImageUsd)) {
+          overBudget = true;
+          break;
+        }
         try {
           const media = await provider.generate(job);
           pay(`image:${provider.name}`, provider.costPerImageUsd);
@@ -150,9 +156,10 @@ export async function generateSceneMedia(
   // A video made of two images repeated eleven times is worse than no video.
   const generated = shots.filter((s) => shotResults.get(s.index)).length;
   if (generated / shots.length < 0.7) {
-    throw new Error(
-      `Only ${generated} of ${shots.length} shots could be generated; skipping this video instead of reusing a few images everywhere.`
-    );
+    const message =
+      `Only ${generated} of ${shots.length} shots could be generated` +
+      `${overBudget ? ' within the daily budget' : ''}; skipping this video instead of reusing a few images everywhere.`;
+    throw overBudget ? new OverBudgetError(message) : new Error(message);
   }
 
   const results: (SceneMedia | null)[] = [];

@@ -1,4 +1,5 @@
 import { html, raw } from 'hono/html';
+import { STARTED_BY, type RunRecord } from '../db/runs.js';
 import type { RecordedEvolve } from '../db/strategyHistory.js';
 import { GENRES } from '../genres.js';
 import type { StrategyRules } from '../types.js';
@@ -16,9 +17,11 @@ export interface FrontPage {
   alerts: ActiveAlert[];
   /** Whether pm2 runs the daemon, so Restart would bring it back. */
   canRestart: boolean;
+  /** The latest Runs, newest first. */
+  recentRuns: RunRecord[];
 }
 
-export function frontPage({ now, startedAt, nextUp, alerts, canRestart }: FrontPage): Html {
+export function frontPage({ now, startedAt, nextUp, alerts, canRestart, recentRuns }: FrontPage): Html {
   return layout(
     'Dashboard',
     html`
@@ -43,6 +46,14 @@ export function frontPage({ now, startedAt, nextUp, alerts, canRestart }: FrontP
         ${canRestart ? '' : html`<p class="muted">${RESTART_NEEDS_PM2}</p>`}
       </section>
       <section>
+        <h2>Recent Runs</h2>
+        ${runList(recentRuns)}
+        <p><a href="/runs">All Runs</a></p>
+        <form method="post" action="/actions/run-now">
+          <button>Run now</button>
+        </form>
+      </section>
+      <section>
         <h2>Next up</h2>
         <dl>
           ${nextUp.map(
@@ -54,6 +65,114 @@ export function frontPage({ now, startedAt, nextUp, alerts, canRestart }: FrontP
       <p class="muted">Times are local to the daemon's machine (${Intl.DateTimeFormat().resolvedOptions().timeZone}).</p>
     `
   );
+}
+
+/** Every Run, newest first. */
+export function runsPage(runs: RunRecord[]): Html {
+  return layout(
+    'Runs',
+    html`<section>
+      <h2>Runs</h2>
+      ${runList(runs)}
+    </section>`
+  );
+}
+
+export interface RunPage {
+  run: RunRecord;
+  /** The Run's output folder, from the project root. */
+  folder?: string;
+  /** The spend recorded against the Run. */
+  cost: string;
+  /** The Run's log, when one was kept. */
+  log?: string;
+}
+
+/** One Run: why it failed first, when it did, then what it made and its log. */
+export function runPage({ run, folder, cost, log }: RunPage): Html {
+  return layout(
+    run.title ?? 'Run',
+    html`
+      ${run.outcome === 'failed' ? failure(run) : ''}
+      <section>
+        <h2>${run.title ?? 'Run'}</h2>
+        <dl>
+          <dt>Outcome</dt>
+          <dd>${outcome(run)}</dd>
+          ${run.genre ? html`<dt>Genre</dt><dd>${genre(run.genre)}</dd>` : ''}
+          ${run.durationSec !== undefined ? html`<dt>Length</dt><dd>${seconds(run.durationSec)}</dd>` : ''}
+          <dt>Started</dt>
+          <dd>${localTime(run.startedAt)} by ${STARTED_BY[run.trigger]}</dd>
+          ${run.finishedAt ? html`<dt>Finished</dt><dd>${localTime(run.finishedAt)}</dd>` : ''}
+          <dt>Cost</dt>
+          <dd>${cost}</dd>
+          ${folder ? html`<dt>Folder</dt><dd>${folder}</dd>` : ''}
+        </dl>
+      </section>
+      <section>
+        <h2>Run log</h2>
+        ${log !== undefined ? html`<pre>${log}</pre>` : html`<p>No run log was kept.</p>`}
+      </section>
+    `
+  );
+}
+
+/** "Failed at step 5 of 7: over budget", then the error; in amber for a Daily budget stop. */
+function failure(run: RunRecord): Html {
+  const at = run.step ? ` at step ${run.step} of 7` : '';
+  const reason = run.reason ? `: ${run.reason}` : '';
+  return html`<section class="failure ${run.reason === 'over budget' ? 'amber' : 'failed'}">
+    <h2>Failed${at}${reason}</h2>
+    ${run.error ? html`<pre>${run.error}</pre>` : ''}
+  </section>`;
+}
+
+/** One line per Run, linking to its page. */
+function runList(runs: RunRecord[]): Html {
+  if (runs.length === 0) return html`<p>No Runs yet.</p>`;
+  return html`<ul class="runs">
+    ${runs.map(
+      (run) => html`<li><a href="/runs/${run.id}">${localTime(run.startedAt)}</a> ${outcome(run)} ${runSummary(run)}</li>`
+    )}
+  </ul>`;
+}
+
+/** "true_heists_cons · They beat the vault · 42 s · $0.12", leaving out what the Run doesn't have yet. */
+function runSummary(run: RunRecord): Html {
+  const parts = [
+    run.genre && genre(run.genre),
+    run.title,
+    run.durationSec !== undefined && seconds(run.durationSec),
+    `$${run.costUsd.toFixed(2)}`,
+  ].filter((part) => part);
+  return html`${parts.map((part, i) => html`${i ? ' · ' : ''}${part}`)}`;
+}
+
+/** "42 s", kept on one line. */
+function seconds(durationSec: number): string {
+  return `${Math.round(durationSec)}\u00a0s`;
+}
+
+/** A Run's outcome, coloured: a Daily budget stop in amber, apart from other failures. */
+function outcome(run: RunRecord): Html {
+  const [text, tone] = outcomeLabel(run);
+  return html`<strong class="${tone}">${text}</strong>`;
+}
+
+/** What a Run's outcome says, and the class that colours it. */
+function outcomeLabel(run: RunRecord): [string, string] {
+  switch (run.outcome) {
+    case 'in_progress':
+      return ['in progress', 'muted'];
+    case 'storyboard_only':
+      return ['storyboard only', ''];
+    case 'rendered':
+      return ['rendered', 'up'];
+    case 'failed':
+      if (run.reason === 'over budget') return ['failed: over budget', 'amber'];
+      if (run.reason) return [`failed: ${run.reason}`, 'failed'];
+      return [run.step ? `failed at step ${run.step}` : 'failed', 'failed'];
+  }
 }
 
 export interface StrategyPage {
@@ -237,6 +356,7 @@ function layout(title: string, body: Html, head: Html | '' = ''): Html {
           <h1>Faceless Video Pipeline</h1>
           <nav>
             <a href="/">Dashboard</a>
+            <a href="/runs">Runs</a>
             <a href="/strategy">Strategy</a>
           </nav>
           ${body}
@@ -247,9 +367,9 @@ function layout(title: string, body: Html, head: Html | '' = ''): Html {
 
 // One column at any width; long words wrap instead of pushing the page sideways.
 const CSS = `
-  :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #666; --line: #ddd; --ok: #1a7f37; --alert: #b42318; }
+  :root { color-scheme: light dark; --bg: #fff; --fg: #1b1b1b; --muted: #666; --line: #ddd; --ok: #1a7f37; --alert: #b42318; --amber: #b54708; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #131313; --fg: #ececec; --muted: #9b9b9b; --line: #333; --ok: #3fb950; --alert: #f85149; }
+    :root { --bg: #131313; --fg: #ececec; --muted: #9b9b9b; --line: #333; --ok: #3fb950; --alert: #f85149; --amber: #f5a524; }
   }
   *, *::before, *::after { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; overflow-wrap: anywhere; }
@@ -272,6 +392,13 @@ const CSS = `
   button { font: inherit; min-height: 2.75rem; padding: 0.5rem 1.25rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .up { color: var(--ok); }
+  .failed { color: var(--alert); }
+  .amber { color: var(--amber); }
+  .failure { border-color: currentColor; }
+  .failure pre { color: var(--fg); }
+  pre { margin: 0.5rem 0 0; font-size: 0.8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .runs { list-style: none; padding: 0; }
+  .runs li + li { border-top: 1px solid var(--line); margin-top: 0.4rem; padding-top: 0.4rem; }
   .muted { color: var(--muted); }
   .tag { font-size: 0.8em; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 0.3em; }
   section p { margin: 0.5rem 0 0; }

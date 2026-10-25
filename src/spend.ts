@@ -1,6 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './loadConfig.js';
 
+/** Thrown when paid work would take today's spend past the Daily budget, stopping the Run. */
+export class OverBudgetError extends Error {}
+
 /** Adds an entry to the spend log, against a Run when it was spent during one. */
 export function insertSpend(database: DatabaseSync, item: string, usd: number, runId?: string): void {
   database.prepare('INSERT INTO spend_log (item, usd, run_id) VALUES (?, ?, ?)').run(item, usd, runId ?? null);

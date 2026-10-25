@@ -55,7 +55,9 @@ export function startTestDaemon(opts: {
   };
   if (opts.strategy) writeStrategy(opts.strategy);
   const clock = new FakeClock(opts.now);
-  const { adapters, calls, failures, pipelineSpend } = fakeAdapters(clock, config, { underPm2: opts.underPm2 });
+  const { adapters, calls, failures, holdPipeline, pipelineSpend } = fakeAdapters(clock, config, {
+    underPm2: opts.underPm2,
+  });
   const startDaemon = (env: Record<string, string>) => {
     const started = createDaemon(loadConfig(env, root), adapters, {
       slotOptions: opts.slotOptions,
@@ -65,7 +67,8 @@ export function startTestDaemon(opts: {
     stopDaemon = () => started.stop();
     return started;
   };
-  let daemon = startDaemon(opts.env ?? {});
+  let env = opts.env ?? {};
+  let daemon = startDaemon(env);
 
   /** Sends a request in-process, as a browser on the dashboard's own page would by default. */
   const request = (pathname: string, init: { method?: string; headers?: Record<string, string> } = {}) => {
@@ -81,16 +84,28 @@ export function startTestDaemon(opts: {
     app: daemon.app,
     clock,
     calls,
-    /** Makes one Run straight away, as `pnpm generate` does. */
-    generate: (options: RunOptions) => daemon.generate(options),
+    /**
+     * Makes one Run straight away, as `pnpm generate` does: through a Daemon of its own on the same
+     * folders, never started, which shares only the database with the running one.
+     */
+    async generate(options: RunOptions) {
+      const commandLine = createDaemon(loadConfig(env, root), adapters, { alertRules: opts.alertRules });
+      try {
+        await commandLine.generate(options);
+      } finally {
+        await commandLine.stop();
+      }
+    },
     failures,
+    holdPipeline,
     pipelineSpend,
     post,
     request,
     writeEnv,
     /** Stops the Daemon and starts a new one on the same folders, clock and fakes, with `env` as its `.env`. */
-    async restart(env: Record<string, string>) {
+    async restart(newEnv: Record<string, string>) {
       await stopDaemon();
+      env = newEnv;
       writeEnv(env);
       daemon = startDaemon(env);
     },

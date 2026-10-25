@@ -165,8 +165,15 @@ export interface RunOptions {
 export interface RunProgress {
   /** Step `step` of 7 has started. */
   step(step: number, message: string): void;
-  /** The Run's output folder now exists. */
-  folder(dir: string): void;
+  /** The Run's Storyboard is written, in the Run's output folder, which now exists. */
+  storyboarded(run: Storyboarded): void;
+}
+
+/** A Run's Storyboard, with its Story and the output folder it is saved in. */
+export interface Storyboarded {
+  folder: string;
+  story: StoryBrief;
+  storyboard: Storyboard;
 }
 
 /** What the Pipeline made of a Run: a Storyboard and, unless the Run was storyboard only, a Video. */

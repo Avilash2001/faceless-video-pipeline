@@ -4,20 +4,32 @@ import { Hono } from 'hono';
 import type { AddressInfo } from 'net';
 import path from 'path';
 import { openDatabase } from '../db/open.js';
+import { getRun, interruptRuns, listRuns, type RunRecord, type RunTrigger } from '../db/runs.js';
 import { evolveHistory } from '../db/strategyHistory.js';
 import type { Config } from '../loadConfig.js';
 import type { Platform, PublishResult, VideoToPublish } from '../platforms.js';
+import { formatCost } from '../spend.js';
 import type { PipelineResult, Push, RunOptions, RunProgress, StrategyRules } from '../types.js';
 import { createAlerts, type AlertRule } from './alerts.js';
 import { every, type Clock } from './clock.js';
-import { generate } from './generate.js';
+import { startRun as beginRun, RunInProgressError, type StartedRun } from './generate.js';
 import { missingEnvKeysRule } from './missingEnvKeys.js';
-import { frontPage, RESTART_NEEDS_PM2, restartingPage, strategyPage, type StrategyPage } from './pages.js';
+import {
+  frontPage,
+  RESTART_NEEDS_PM2,
+  restartingPage,
+  runPage,
+  runsPage,
+  strategyPage,
+  type StrategyPage,
+} from './pages.js';
 import { protect } from './protect.js';
 import { nextDue, startSchedule, type ScheduledTask } from './schedule.js';
 
 const ALERT_CHECK_EVERY_MS = 60_000;
 const HEARTBEAT_EVERY_MS = 5 * 60_000;
+/** How many Runs the front page lists. */
+const RECENT_RUNS = 5;
 
 /** Everything the Daemon reaches outside the process through. Tests pass fakes. */
 export interface Adapters {
@@ -44,12 +56,22 @@ export interface Adapters {
 export interface Daemon {
   /** The dashboard: served by `listen`, or called in-process by tests. */
   app: Hono;
-  /** Starts the generate, metrics sync and evolve schedules, the Alert checks and the heartbeat. */
+  /**
+   * Starts the generate, metrics sync and evolve schedules, the Alert checks and the heartbeat. A
+   * Run still marked in progress was cut off when the daemon last stopped, so it is marked failed.
+   */
   start(): void;
   /** Serves the dashboard on 127.0.0.1 only, at DASHBOARD_PORT. */
   listen(): Promise<AddressInfo>;
-  /** Makes one Run with these options, as a Slot would: how the command line starts a Run. */
+  /**
+   * Makes one Run with these options, as a Slot would: how the command line starts a Run. Rejects
+   * with RunInProgressError, naming that Run, while another Run is in progress.
+   */
   generate(options: RunOptions): Promise<void>;
+  /** Pulls Post metrics now, as the metrics sync schedule does: how the command line syncs. */
+  syncMetrics(): Promise<void>;
+  /** Evolves the strategy now, as the evolve schedule does: how the command line evolves. */
+  evolve(): Promise<void>;
   stop(): Promise<void>;
 }
 
@@ -72,11 +94,17 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   const deps = { ...adapters, config, database };
   const alertRules = [missingEnvKeysRule(config.paths.root), ...(options.alertRules ?? [])];
   const alerts = createAlerts({ ...adapters, database, settings: config.alerts, rules: alertRules });
-  const run = (options: RunOptions) => generate(deps, options).finally(() => alerts.check());
+  const syncMetrics = () => adapters.analytics.syncMetrics();
+  const evolve = () => adapters.analytics.evolve();
+  /** Starts a Run, or throws RunInProgressError while one is in progress. Alerts are checked once it ends. */
+  const startRun = (trigger: RunTrigger, options: RunOptions): StartedRun => {
+    const run = beginRun(deps, trigger, options);
+    return { id: run.id, done: run.done.finally(() => alerts.check()) };
+  };
   const tasks: ScheduledTask[] = [
-    { name: 'Generate', expression: config.schedule.generate, run: () => run(slotOptions) },
-    { name: 'Metrics sync', expression: config.schedule.metrics, run: () => adapters.analytics.syncMetrics() },
-    { name: 'Evolve', expression: config.schedule.evolve, run: () => adapters.analytics.evolve() },
+    { name: 'Generate', expression: config.schedule.generate, run: () => startRun('slot', slotOptions).done },
+    { name: 'Metrics sync', expression: config.schedule.metrics, run: () => syncMetrics() },
+    { name: 'Evolve', expression: config.schedule.evolve, run: () => evolve() },
   ];
 
   const app = new Hono();
@@ -85,7 +113,21 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
     const now = clock.now();
     const nextUp = tasks.map((task) => ({ name: task.name, due: nextDue(task.expression, now) }));
     const canRestart = adapters.processControl.canRestart();
-    return c.html(frontPage({ now, startedAt, nextUp, alerts: alerts.active(), canRestart }));
+    const recentRuns = listRuns(database, RECENT_RUNS);
+    return c.html(frontPage({ now, startedAt, nextUp, alerts: alerts.active(), canRestart, recentRuns }));
+  });
+  app.get('/runs', (c) => c.html(runsPage(listRuns(database))));
+  app.get('/runs/:id', (c) => {
+    const run = getRun(database, c.req.param('id'));
+    if (!run) return c.notFound();
+    return c.html(
+      runPage({
+        run,
+        folder: run.folder && path.relative(config.paths.root, run.folder),
+        cost: formatCost(run.costUsd, config.costs),
+        log: readRunLog(run),
+      })
+    );
   });
   app.get('/strategy', (c) => {
     const { root, strategyFile } = config.paths;
@@ -96,6 +138,18 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
         evolves: evolveHistory(database),
       })
     );
+  });
+  app.post('/actions/run-now', (c) => {
+    let run: StartedRun;
+    try {
+      run = startRun('run_now', {});
+    } catch (err) {
+      if (err instanceof RunInProgressError) return c.text(err.message, 409);
+      throw err;
+    }
+    // The Run goes on after the answer; its page shows how it ends.
+    run.done.catch((err) => console.error(`[Daemon] Run now failed: ${(err as Error).message || String(err)}`));
+    return c.redirect(`/runs/${run.id}`, 303);
   });
   app.post('/actions/restart', (c) => {
     if (!adapters.processControl.canRestart()) return c.text(RESTART_NEEDS_PM2, 409);
@@ -132,6 +186,8 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   return {
     app,
     start() {
+      const interrupted = interruptRuns(database, clock.now());
+      if (interrupted) console.warn(`[Daemon] Marked ${interrupted} Run(s) left in progress as failed (interrupted).`);
       stopSchedule = startSchedule(clock, tasks);
       stopAlertChecks = every(clock, ALERT_CHECK_EVERY_MS, () => alerts.check());
       const { url } = config.heartbeat;
@@ -148,9 +204,23 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
         server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.dashboard.port }, resolve);
       });
     },
-    generate: run,
+    async generate(options) {
+      await startRun('command_line', options).done;
+    },
+    syncMetrics,
+    evolve,
     stop,
   };
+}
+
+/** The Run's log: run.log in its folder, or the log kept with its record when it ended before it had one. */
+function readRunLog(run: RunRecord): string | undefined {
+  if (!run.folder) return run.log;
+  try {
+    return fs.readFileSync(path.join(run.folder, 'run.log'), 'utf-8');
+  } catch {
+    return undefined;
+  }
 }
 
 /** The strategy evolve and the Pipeline read, or why it can't be read. */

@@ -1,5 +1,6 @@
 import { CONFIG, ImageProviderName, MotionProviderName } from './config.js';
 import { systemClock } from './daemon/clock.js';
+import { RunInProgressError } from './daemon/generate.js';
 import { Adapters, createDaemon } from './daemon/index.js';
 import { GENRES } from './genres.js';
 import { runPipeline } from './pipeline.js';
@@ -59,17 +60,6 @@ const adapters: Adapters = {
 
 async function main() {
   const args = process.argv.slice(2);
-
-  if (args.includes('--sync-metrics')) {
-    await syncCrossPlatformMetrics();
-    return;
-  }
-
-  if (args.includes('--evolve')) {
-    await evolveStrategyRules();
-    return;
-  }
-
   const runOptions = parseRunOptions(args);
   // The daemon gives every Slot's Run the flags it was started with.
   const daemon = createDaemon(CONFIG, adapters, { slotOptions: runOptions });
@@ -82,14 +72,19 @@ async function main() {
     return;
   }
 
+  // One-off commands go through the same Daemon as the schedule, without starting its schedule or
+  // web server, so a command-line Run is recorded like any other.
   try {
-    await daemon.generate(runOptions);
+    if (args.includes('--sync-metrics')) await daemon.syncMetrics();
+    else if (args.includes('--evolve')) await daemon.evolve();
+    else await daemon.generate(runOptions);
   } finally {
     await daemon.stop();
   }
 }
 
 main().catch((err) => {
-  console.error('[Fatal Pipeline Error]:', err);
+  if (err instanceof RunInProgressError) console.error(`[Pipeline] Refused: ${err.message}`);
+  else console.error('[Fatal Pipeline Error]:', err);
   process.exit(1);
 });

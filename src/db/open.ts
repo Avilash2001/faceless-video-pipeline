@@ -6,6 +6,8 @@ import path from 'path';
 export function openDatabase(file: string): DatabaseSync {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const database = new DatabaseSync(file);
+  // The daemon and a command-line Run share the database; wait for each other's writes.
+  database.exec('PRAGMA busy_timeout = 5000;');
   database.exec('PRAGMA journal_mode = WAL;');
   initSchema(database);
   return database;
@@ -98,6 +100,36 @@ function initSchema(database: DatabaseSync): void {
       -- Missing until it went out; a failed push is tried again at the next check.
       sent_at TEXT
     );
+
+    -- One row per Run, however it started; times are the Daemon's clock, as ISO strings.
+    CREATE TABLE IF NOT EXISTS runs (
+      -- Also the run_id of the spend made during it.
+      id TEXT PRIMARY KEY,
+      -- slot, run_now or command_line.
+      trigger TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      -- Missing while in progress.
+      finished_at TEXT,
+      -- in_progress, storyboard_only, failed or rendered.
+      outcome TEXT NOT NULL,
+      -- The step of 7 reached; for a failed Run, the step it failed at.
+      step INTEGER,
+      error TEXT,
+      -- Why a failed Run stopped, when it wasn't an error in a step: over budget, or interrupted.
+      reason TEXT,
+      -- Known once the Storyboard is written (the Genre sooner, when the Run was given one).
+      story_external_id TEXT,
+      genre TEXT,
+      title TEXT,
+      duration_sec REAL,
+      folder TEXT,
+      video_path TEXT,
+      -- The log of a Run that ended before it had a folder to keep run.log in.
+      log TEXT
+    );
+    -- One Run at a time, whichever process starts it.
+    CREATE UNIQUE INDEX IF NOT EXISTS runs_one_in_progress ON runs(outcome) WHERE outcome = 'in_progress';
   `);
 
   addColumnIfMissing(database, 'spend_log', 'run_id TEXT');

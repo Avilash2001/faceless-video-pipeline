@@ -53,7 +53,7 @@ export async function runPipeline(options: RunOptions, progress: RunProgress): P
   const runDir = path.join(CONFIG.paths.outputDir, runName);
   fs.mkdirSync(runDir, { recursive: true });
   fs.writeFileSync(path.join(runDir, 'storyboard.json'), JSON.stringify({ brief, storyboard }, null, 2));
-  progress.folder(runDir);
+  progress.storyboarded({ folder: runDir, story: brief, storyboard });
   console.log(
     `[Pipeline] ${storyboard.scenes.length} scenes, ${storyboard.fullNarrationText.split(/\s+/).length} words, ` +
       `style "${storyboard.visualStyle.name}", hook "${storyboard.hookOverlayText}"`
