@@ -140,11 +140,17 @@ export function finishRun(database: DatabaseSync, id: string, end: RunEnd): void
     );
 }
 
-/** Marks every Run still in progress as failed (interrupted): no process is running it any more. Returns how many. */
-export function interruptRuns(database: DatabaseSync, at: Date): number {
+/**
+ * Marks Runs still in progress as failed (interrupted), as no process is running them any more:
+ * every such Run, or only Run `id` when given. Returns how many.
+ */
+export function interruptRuns(database: DatabaseSync, at: Date, id?: string): number {
   const { changes } = database
-    .prepare(`UPDATE runs SET outcome = 'failed', reason = 'interrupted', finished_at = ? WHERE outcome = 'in_progress'`)
-    .run(at.toISOString());
+    .prepare(
+      `UPDATE runs SET outcome = 'failed', reason = 'interrupted', finished_at = ?
+       WHERE outcome = 'in_progress' AND (?2 IS NULL OR id = ?2)`
+    )
+    .run(at.toISOString(), id ?? null);
   return Number(changes);
 }
 

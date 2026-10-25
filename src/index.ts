@@ -1,3 +1,4 @@
+import os from 'os';
 import { CONFIG, ImageProviderName, MotionProviderName } from './config.js';
 import { systemClock } from './daemon/clock.js';
 import { RunInProgressError } from './daemon/generate.js';
@@ -63,6 +64,17 @@ async function main() {
   const runOptions = parseRunOptions(args);
   // The daemon gives every Slot's Run the flags it was started with.
   const daemon = createDaemon(CONFIG, adapters, { slotOptions: runOptions });
+  // Ctrl-C, a closed terminal or pm2 stopping the daemon cuts the process's Run off. Mark it
+  // interrupted before exiting, so it doesn't hold up every other Run until the daemon next starts.
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.once(signal, () => {
+      try {
+        daemon.interrupt();
+      } finally {
+        process.exit(128 + os.constants.signals[signal]);
+      }
+    });
+  }
 
   if (args.includes('--daemon')) {
     daemon.start();

@@ -69,6 +69,8 @@ export function startTestDaemon(opts: {
   };
   let env = opts.env ?? {};
   let daemon = startDaemon(env);
+  /** The Daemon `pnpm generate` builds: its own, on the same folders, never started. */
+  const commandLine = () => createDaemon(loadConfig(env, root), adapters, { alertRules: opts.alertRules });
 
   /** Sends a request in-process, as a browser on the dashboard's own page would by default. */
   const request = (pathname: string, init: { method?: string; headers?: Record<string, string> } = {}) => {
@@ -89,12 +91,31 @@ export function startTestDaemon(opts: {
      * folders, never started, which shares only the database with the running one.
      */
     async generate(options: RunOptions) {
-      const commandLine = createDaemon(loadConfig(env, root), adapters, { alertRules: opts.alertRules });
+      const cli = commandLine();
       try {
-        await commandLine.generate(options);
+        await cli.generate(options);
       } finally {
-        await commandLine.stop();
+        await cli.stop();
       }
+    },
+    /**
+     * Starts `pnpm generate` (see `generate`) without waiting for it to finish, and resolves once
+     * its Run has got as far as it can. `done` is how the process ends if nothing stops it;
+     * `stopWithSignal` is Ctrl-C or SIGTERM, which interrupts the Run, and the process is gone.
+     */
+    async startGenerate(options: RunOptions) {
+      const cli = commandLine();
+      const done = cli.generate(options);
+      // Handled here, so a refusal while starting isn't reported before the test awaits `done`.
+      done.catch(() => {});
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      return {
+        done,
+        async stopWithSignal() {
+          cli.interrupt();
+          await cli.stop();
+        },
+      };
     },
     failures,
     holdPipeline,

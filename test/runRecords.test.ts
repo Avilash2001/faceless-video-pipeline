@@ -158,6 +158,34 @@ describe('Run records', () => {
     expect(calls.pipeline).toHaveLength(2);
   });
 
+  it('marks a command-line Run stopped with Ctrl-C failed ("interrupted") at once, so the next Run can start', async () => {
+    const { calls, generate, holdPipeline, startGenerate, request, pageText } = startTestDaemon({ now: SUNDAY_10AM });
+    holdPipeline(4);
+    const commandLine = await startGenerate({});
+    const [run] = await runPages(request);
+
+    await commandLine.stopWithSignal();
+
+    expect(await pageText('/runs')).toContain(
+      'Sun 25 Oct 10:00 failed: interrupted true_heists_cons · They beat the vault'
+    );
+    expect(await pageText(run)).toContain('Failed at step 4 of 7: interrupted');
+    await generate({});
+    expect(calls.pipeline).toHaveLength(2);
+  });
+
+  it("stopping a command-line Run that was refused leaves the daemon's Run in progress alone", async () => {
+    const { holdPipeline, post, startGenerate, pageText } = startTestDaemon({ now: SUNDAY_10AM });
+    holdPipeline(4);
+    await post('/actions/run-now');
+    const commandLine = await startGenerate({});
+    await expect(commandLine.done).rejects.toThrow('Another Run is in progress');
+
+    await commandLine.stopWithSignal();
+
+    expect(await pageText('/runs')).toContain('Sun 25 Oct 10:00 in progress');
+  });
+
   it('keeps the log of a Run that failed before it had a folder, and shows it on its page', async () => {
     const { generate, failures, request, pageText } = startTestDaemon({ now: SUNDAY_10AM });
     failures.pipeline = new Error('No story candidates for reddit_revenge');

@@ -72,6 +72,11 @@ export interface Daemon {
   syncMetrics(): Promise<void>;
   /** Evolves the strategy now, as the evolve schedule does: how the command line evolves. */
   evolve(): Promise<void>;
+  /**
+   * Marks the Run this Daemon started as failed (interrupted), if it is still in progress: for when
+   * the process is stopped part-way through it. Runs started by other processes are left alone.
+   */
+  interrupt(): void;
   stop(): Promise<void>;
 }
 
@@ -96,9 +101,12 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   const alerts = createAlerts({ ...adapters, database, settings: config.alerts, rules: alertRules });
   const syncMetrics = () => adapters.analytics.syncMetrics();
   const evolve = () => adapters.analytics.evolve();
+  /** The latest Run this Daemon started. */
+  let ownRun: string | undefined;
   /** Starts a Run, or throws RunInProgressError while one is in progress. Alerts are checked once it ends. */
   const startRun = (trigger: RunTrigger, options: RunOptions): StartedRun => {
     const run = beginRun(deps, trigger, options);
+    ownRun = run.id;
     return { id: run.id, done: run.done.finally(() => alerts.check()) };
   };
   const tasks: ScheduledTask[] = [
@@ -209,6 +217,11 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
     },
     syncMetrics,
     evolve,
+    interrupt() {
+      if (ownRun && interruptRuns(database, clock.now(), ownRun)) {
+        console.warn(`[Daemon] Stopped part-way through Run ${ownRun}: marked it failed (interrupted).`);
+      }
+    },
     stop,
   };
 }
