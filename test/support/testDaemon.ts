@@ -73,13 +73,20 @@ export function startTestDaemon(opts: {
   const commandLine = () => createDaemon(loadConfig(env, root), adapters, { alertRules: opts.alertRules });
 
   /** Sends a request in-process, as a browser on the dashboard's own page would by default. */
-  const request = (pathname: string, init: { method?: string; headers?: Record<string, string> } = {}) => {
+  const request = (
+    pathname: string,
+    init: { method?: string; headers?: Record<string, string>; body?: string } = {}
+  ) => {
     const headers = { host: DASHBOARD, ...init.headers };
-    return daemon.app.request(`http://${headers.host}${pathname}`, { method: init.method, headers });
+    return daemon.app.request(`http://${headers.host}${pathname}`, { method: init.method, headers, body: init.body });
   };
-  /** Posts an action, as a form on the dashboard's own page does. */
-  const post = (pathname: string) =>
-    request(pathname, { method: 'POST', headers: { origin: `http://${DASHBOARD}` } });
+  /** Posts an action, as a form on the dashboard's own page does, with `form` as the form's fields. */
+  const post = (pathname: string, form: Record<string, string> = {}) =>
+    request(pathname, {
+      method: 'POST',
+      headers: { origin: `http://${DASHBOARD}`, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(form).toString(),
+    });
 
   return {
     /** The dashboard's routes; add one only before the first request. */
@@ -122,6 +129,8 @@ export function startTestDaemon(opts: {
     pipelineSpend,
     post,
     request,
+    /** Lets work already under way, such as the Run a Run now started, go as far as it can. */
+    settle,
     writeEnv,
     /** Stops the Daemon and starts a new one on the same folders, clock and fakes, with `env` as its `.env`. */
     async restart(newEnv: Record<string, string>) {
@@ -159,10 +168,69 @@ export function startTestDaemon(opts: {
       if (res.status !== 200) throw new Error(`GET ${pathname} answered ${res.status}`);
       return visibleText(await res.text());
     },
+    /**
+     * Opens the dashboard's event stream, as a page does, and collects each event it sends. The
+     * stream is closed when the test finishes.
+     */
+    async openEvents() {
+      const res = await request('/events');
+      if (res.status !== 200 || !res.body) throw new Error(`GET /events answered ${res.status}`);
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      onTestFinished(() => reader.cancel());
+      const events: StreamEvent[] = [];
+      let ended = false;
+      let buffer = '';
+      void (async () => {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += value;
+          for (let end = buffer.indexOf('\n\n'); end >= 0; end = buffer.indexOf('\n\n')) {
+            events.push(parseEvent(buffer.slice(0, end)));
+            buffer = buffer.slice(end + 2);
+          }
+        }
+        ended = true;
+      })();
+      return {
+        contentType: res.headers.get('content-type'),
+        /** Every event sent so far, once the work under way has gone as far as it can. */
+        async received(): Promise<StreamEvent[]> {
+          await settle();
+          return events;
+        },
+        /** Whether the dashboard has ended the stream. */
+        async ended(): Promise<boolean> {
+          await settle();
+          return ended;
+        },
+      };
+    },
   };
 }
 
-function visibleText(html: string): string {
+/** One event from the dashboard's event stream: its type and its data, parsed. */
+export interface StreamEvent {
+  event: string;
+  data: unknown;
+}
+
+/** "event: step\ndata: {...}" → { event: 'step', data: {...} }. */
+function parseEvent(text: string): StreamEvent {
+  const lines = text.split('\n');
+  const event = lines.find((line) => line.startsWith('event: '))?.slice('event: '.length) ?? 'message';
+  const data = lines
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => line.slice('data: '.length))
+    .join('\n');
+  return { event, data: JSON.parse(data) };
+}
+
+/** Lets work already under way go as far as it can. */
+const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+/** Text a browser would show for `html`, with tags stripped and whitespace collapsed. */
+export function visibleText(html: string): string {
   return html
     .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/g, ' ')
     .replace(/<[^>]+>/g, ' ')

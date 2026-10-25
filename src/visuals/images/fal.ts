@@ -1,11 +1,12 @@
 import { CONFIG } from '../../config.js';
+import { imagePriceUsd } from '../../spend.js';
 import { downloadTo, falRun, toDataUri } from '../falClient.js';
 import { GeneratedMedia, ImageJob, ImageProvider } from '../types.js';
 
 /** fal.ai image models (default Seedream 5 Lite; edit endpoint when references are attached). */
 export const falImageProvider: ImageProvider = {
   name: 'fal',
-  costPerImageUsd: CONFIG.fal.imageCostUsd,
+  costPerImageUsd: imagePriceUsd('fal', CONFIG),
   supportsRefs: Boolean(CONFIG.fal.imageEditModel),
   async generate(job: ImageJob): Promise<GeneratedMedia> {
     const useEdit = job.refImages.length > 0 && Boolean(CONFIG.fal.imageEditModel);

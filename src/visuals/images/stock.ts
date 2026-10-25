@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { request } from 'undici';
 import { CONFIG } from '../../config.js';
+import { imagePriceUsd } from '../../spend.js';
 import { GeneratedMedia, ImageJob, ImageProvider } from '../types.js';
 
 /**
@@ -10,7 +11,7 @@ import { GeneratedMedia, ImageJob, ImageProvider } from '../types.js';
  */
 export const stockProvider: ImageProvider = {
   name: 'stock',
-  costPerImageUsd: 0,
+  costPerImageUsd: imagePriceUsd('stock', CONFIG),
   supportsRefs: false,
   async generate(job: ImageJob): Promise<GeneratedMedia> {
     fs.mkdirSync(CONFIG.paths.brollCacheDir, { recursive: true });

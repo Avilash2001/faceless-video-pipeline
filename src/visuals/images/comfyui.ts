@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { CONFIG } from '../../config.js';
+import { imagePriceUsd } from '../../spend.js';
 import { resolveWorkflowPath, runComfyWorkflow } from '../comfyClient.js';
 import { GeneratedMedia, ImageJob, ImageProvider } from '../types.js';
 
@@ -9,7 +10,7 @@ import { GeneratedMedia, ImageJob, ImageProvider } from '../types.js';
  */
 export const comfyImageProvider: ImageProvider = {
   name: 'comfyui',
-  costPerImageUsd: 0,
+  costPerImageUsd: imagePriceUsd('comfyui', CONFIG),
   supportsRefs: fs.existsSync(resolveWorkflowPath(CONFIG.comfyui.imageEditWorkflow)),
   async generate(job: ImageJob): Promise<GeneratedMedia> {
     const useEdit = job.refImages.length > 0 && this.supportsRefs;

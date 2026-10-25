@@ -10,11 +10,14 @@ import { withinRun } from '../runContext.js';
 import { formatCost, insertSpend, OverBudgetError, spendForRunUsd, spendTodayUsd } from '../spend.js';
 import type { RunOptions, RunProgress } from '../types.js';
 import type { Adapters } from './index.js';
+import type { RunWatcher } from './liveProgress.js';
 import { formatLocalTime } from './localTime.js';
 
 export interface GenerateDeps extends Pick<Adapters, 'clock' | 'pipeline' | 'platforms'> {
   config: Config;
   database: DatabaseSync;
+  /** Told of each step and log line as the Run goes. */
+  watcher: RunWatcher;
 }
 
 /** A Run that has started: its id, and its end, which rejects with the error when the Run fails. */
@@ -38,17 +41,19 @@ export class RunInProgressError extends Error {
  * while another Run is, in this process or any other. The Pipeline takes it through steps 1 to 6,
  * then step 7 publishes the Video and the legacy video record is written. Everything printed
  * during the Run is kept in run.log in its folder, and spend made during it is recorded against it.
+ * The watcher hears of each step and log line as it happens, and of the Run's end once it is recorded.
  */
 export function startRun(deps: GenerateDeps, trigger: RunTrigger, options: RunOptions): StartedRun {
   const id = randomUUID();
   const inProgress = insertRun(deps.database, { id, trigger, options, startedAt: deps.clock.now() });
   if (inProgress) throw new RunInProgressError(inProgress);
+  deps.watcher.started(id);
   return { id, done: execute(deps, id, options) };
 }
 
 async function execute(deps: GenerateDeps, id: string, options: RunOptions): Promise<void> {
-  const { clock, config, database } = deps;
-  const log = new RunLog();
+  const { clock, config, database, watcher } = deps;
+  const log = new RunLog((line) => watcher.log(id, line));
   const run = {
     log: (line: string) => log.write(line),
     spend: (item: string, usd: number) => insertSpend(database, item, usd, id),
@@ -59,7 +64,8 @@ async function execute(deps: GenerateDeps, id: string, options: RunOptions): Pro
     await withinRun(run, async () => {
       const progress: RunProgress = {
         step: (step, message) => {
-          recordStep(database, id, step);
+          recordStep(database, id, step, message);
+          watcher.step(id, step, message);
           console.log(`[Pipeline] ${step}/7 ${message}`);
         },
         storyboarded: (storyboarded) => {
@@ -120,6 +126,8 @@ async function execute(deps: GenerateDeps, id: string, options: RunOptions): Pro
       console.error(`[Pipeline] Couldn't record the failed Run ${id}: ${(recordErr as Error).message || String(recordErr)}`);
     }
     throw err;
+  } finally {
+    watcher.ended(id);
   }
 }
 
@@ -128,7 +136,11 @@ class RunLog {
   private pending: string[] = [];
   private file: string | undefined;
 
+  /** `written` hears of each line as it is written. */
+  constructor(private readonly written: (line: string) => void) {}
+
   write(line: string): void {
+    this.written(line);
     if (this.file) fs.appendFileSync(this.file, `${line}\n`);
     else this.pending.push(line);
   }

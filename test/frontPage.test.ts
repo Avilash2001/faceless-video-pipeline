@@ -52,12 +52,4 @@ describe('front page', () => {
     expect(page).toContain('Sun 25 Oct 10:01 rendered true_heists_cons · They beat the vault · 42 s · $0.00 All Runs');
     expect(page).not.toContain('Sun 25 Oct 10:00 rendered');
   });
-
-  it('has a Run now button that posts Run now', async () => {
-    const { request } = startTestDaemon({ now: SUNDAY_10AM });
-
-    const page = await (await request('/')).text();
-
-    expect(page).toMatch(/<form method="post" action="\/actions\/run-now">\s*<button>Run now<\/button>/);
-  });
 });

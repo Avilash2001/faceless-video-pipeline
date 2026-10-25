@@ -1,8 +1,10 @@
 import path from 'path';
 import { parseTimeRange } from './timeRange.js';
 
-export type ImageProviderName = 'gemini' | 'comfyui' | 'fal' | 'stock';
-export type MotionProviderName = 'none' | 'gemini' | 'fal' | 'comfyui';
+export const IMAGE_PROVIDER_NAMES = ['gemini', 'comfyui', 'fal', 'stock'] as const;
+export type ImageProviderName = (typeof IMAGE_PROVIDER_NAMES)[number];
+export const MOTION_PROVIDER_NAMES = ['none', 'gemini', 'fal', 'comfyui'] as const;
+export type MotionProviderName = (typeof MOTION_PROVIDER_NAMES)[number];
 export type RedditAccessMode = 'api' | 'inbox' | 'rss';
 
 export type Config = ReturnType<typeof loadConfig>;

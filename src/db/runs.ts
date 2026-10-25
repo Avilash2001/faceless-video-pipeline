@@ -27,6 +27,8 @@ export interface RunRecord {
   outcome: RunOutcome;
   /** The step of 7 the Run had reached; for a failed Run, the step it failed at. */
   step?: number;
+  /** What that step said it was doing, such as "Writing the storyboard...". */
+  stepMessage?: string;
   error?: string;
   reason?: FailureReason;
   storyExternalId?: string;
@@ -62,6 +64,7 @@ interface RunRow {
   finished_at: string | null;
   outcome: RunOutcome;
   step: number | null;
+  step_message: string | null;
   error: string | null;
   reason: FailureReason | null;
   story_external_id: string | null;
@@ -109,9 +112,9 @@ export function runInProgress(database: DatabaseSync): RunRecord | undefined {
   return row && fromRow(row);
 }
 
-/** Notes the step of 7 a Run has started. */
-export function recordStep(database: DatabaseSync, id: string, step: number): void {
-  database.prepare('UPDATE runs SET step = ? WHERE id = ?').run(step, id);
+/** Notes the step of 7 a Run has started, and what it said it is doing. */
+export function recordStep(database: DatabaseSync, id: string, step: number, message: string): void {
+  database.prepare('UPDATE runs SET step = ?, step_message = ? WHERE id = ?').run(step, message, id);
 }
 
 /** Notes the Story a Run is making, its Storyboard's Genre and title, and the folder they are saved in. */
@@ -178,6 +181,7 @@ function fromRow(row: RunRow): RunRecord {
     finishedAt: row.finished_at ? new Date(row.finished_at) : undefined,
     outcome: row.outcome,
     step: row.step ?? undefined,
+    stepMessage: row.step_message ?? undefined,
     error: row.error ?? undefined,
     reason: row.reason ?? undefined,
     storyExternalId: row.story_external_id ?? undefined,

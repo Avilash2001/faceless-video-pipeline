@@ -2,8 +2,16 @@ import { html, raw } from 'hono/html';
 import { STARTED_BY, type RunRecord } from '../db/runs.js';
 import type { RecordedEvolve } from '../db/strategyHistory.js';
 import { GENRES } from '../genres.js';
+import {
+  IMAGE_PROVIDER_NAMES,
+  MOTION_PROVIDER_NAMES,
+  type ImageProviderName,
+  type MotionProviderName,
+} from '../loadConfig.js';
+import { formatUsd, type BudgetCheck } from '../spend.js';
 import type { StrategyRules } from '../types.js';
 import type { ActiveAlert } from './alerts.js';
+import type { LiveRun } from './liveProgress.js';
 import { formatLocalTime } from './localTime.js';
 
 type Html = ReturnType<typeof html>;
@@ -19,9 +27,23 @@ export interface FrontPage {
   canRestart: boolean;
   /** The latest Runs, newest first. */
   recentRuns: RunRecord[];
+  /** The Run in progress, if any. */
+  current?: CurrentRun;
+  /** The Providers a Run uses when Run now chooses none: IMAGE_PROVIDER and MOTION_PROVIDER. */
+  defaultProviders: { image: ImageProviderName; motion: MotionProviderName };
 }
 
-export function frontPage({ now, startedAt, nextUp, alerts, canRestart, recentRuns }: FrontPage): Html {
+/** The Run in progress, with its progress so far once the dashboard is following it. */
+export interface CurrentRun {
+  run: RunRecord;
+  live?: LiveRun;
+}
+
+/** How many of its latest log lines the front page shows of the Run in progress. */
+const LOG_TAIL = 12;
+
+export function frontPage(page: FrontPage): Html {
+  const { now, startedAt, nextUp, alerts, canRestart, recentRuns, current, defaultProviders } = page;
   return layout(
     'Dashboard',
     html`
@@ -35,6 +57,7 @@ export function frontPage({ now, startedAt, nextUp, alerts, canRestart, recentRu
             </ul>
           </section>`
         : ''}
+      ${current ? currentRun(current) : ''}
       <section>
         <dl>
           <dt>Daemon</dt>
@@ -49,9 +72,7 @@ export function frontPage({ now, startedAt, nextUp, alerts, canRestart, recentRu
         <h2>Recent Runs</h2>
         ${runList(recentRuns)}
         <p><a href="/runs">All Runs</a></p>
-        <form method="post" action="/actions/run-now">
-          <button>Run now</button>
-        </form>
+        ${runNowForm(defaultProviders, current !== undefined)}
       </section>
       <section>
         <h2>Next up</h2>
@@ -63,7 +84,143 @@ export function frontPage({ now, startedAt, nextUp, alerts, canRestart, recentRu
         </dl>
       </section>
       <p class="muted">Times are local to the daemon's machine (${Intl.DateTimeFormat().resolvedOptions().timeZone}).</p>
+      ${liveScript(current?.run.id)}
     `
+  );
+}
+
+/** The Run in progress: its step and the tail of its log, kept up to date by the live script. */
+function currentRun({ run, live }: CurrentRun): Html {
+  return html`<section>
+    <h2>Run in progress</h2>
+    <dl>
+      <dt>Started</dt>
+      <dd><a href="/runs/${run.id}">${localTime(run.startedAt)}</a> by ${STARTED_BY[run.trigger]}</dd>
+      ${step(run, live)}
+    </dl>
+    ${liveLog(live, LOG_TAIL)}
+  </section>`;
+}
+
+/**
+ * A Run in progress's step, "4 of 7: Synthesizing voiceover...", kept up to date by the live
+ * script; from its record until the dashboard is following it.
+ */
+function step(run: RunRecord, live?: LiveRun): Html {
+  const reached = live?.step ?? (run.step ? { step: run.step, message: run.stepMessage } : undefined);
+  const text = reached ? stepText(reached.step, reached.message) : 'Starting';
+  return html`<dt>Step</dt><dd data-step>${text}</dd>`;
+}
+
+/** "4 of 7: Synthesizing voiceover...", or "4 of 7" when the message wasn't kept. Written the same way in LIVE_JS. */
+function stepText(step: number, message: string | undefined): string {
+  return message ? `${step} of 7: ${message}` : `${step} of 7`;
+}
+
+/**
+ * A Run in progress's log so far, a line per write, which the live script adds to; only the last
+ * `tail` when given. Empty until the dashboard is following the Run.
+ */
+function liveLog(live: LiveRun | undefined, tail?: number): Html {
+  const lines = live?.lines ?? [];
+  const shown = tail ? lines.slice(-tail) : lines;
+  return html`<pre data-log data-lines="${lines.length}" data-tail="${tail ?? ''}">${shown.map((line) => html`<span>${line}\n</span>`)}</pre>`;
+}
+
+/**
+ * Follows the event stream: keeps the step and log of Run `run` up to date, and reloads the page
+ * once a different Run, or none, is in progress, so the page shows how the Run ended.
+ */
+function liveScript(run: string | undefined): Html {
+  return html`<script data-run="${run ?? ''}">
+    ${raw(LIVE_JS)}
+  </script>`;
+}
+
+const LIVE_JS = `
+  (() => {
+    const run = document.currentScript.dataset.run || null;
+    const step = document.querySelector('[data-step]');
+    const log = document.querySelector('[data-log]');
+    const tail = Number(log?.dataset.tail) || Infinity;
+    // Lines the page was drawn with; catching up sends them again.
+    let next = Number(log?.dataset.lines) || 0;
+    const events = new EventSource('/events');
+    // A form posted from this page leads elsewhere, as Run now does to its Run; a reload mustn't cut that off.
+    addEventListener('submit', () => events.close());
+    const on = (type, handle) => events.addEventListener(type, (e) => handle(JSON.parse(e.data)));
+    on('run', (data) => {
+      if (data.run !== run) location.reload();
+    });
+    on('step', (data) => {
+      if (data.run === run && step) step.textContent = data.step + ' of 7' + (data.message ? ': ' + data.message : '');
+    });
+    on('log', (data) => {
+      if (data.run !== run || !log || data.index < next) return;
+      const line = document.createElement('span');
+      line.textContent = data.line + '\\n';
+      log.append(line);
+      next = data.index + 1;
+      while (log.children.length > tail) log.firstElementChild.remove();
+    });
+  })();
+`;
+
+/** Run now, with the command line's options folded away; off while a Run is in progress. */
+function runNowForm(defaults: FrontPage['defaultProviders'], inProgress: boolean): Html {
+  return html`<form method="post" action="/actions/run-now">
+      <fieldset ${inProgress ? 'disabled' : ''}>
+        <details class="options">
+          <summary>Options</summary>
+          <label>Genre ${select('genre', 'Strategy picks', Object.keys(GENRES))}</label>
+          <label>Image Provider ${select('images', `Default (${defaults.image})`, IMAGE_PROVIDER_NAMES)}</label>
+          <label>Motion Provider ${select('motion', `Default (${defaults.motion})`, MOTION_PROVIDER_NAMES)}</label>
+          <label class="check"><input type="checkbox" name="storyboard-only" /> Storyboard only</label>
+          <label class="check"><input type="checkbox" name="no-upload" /> No upload</label>
+        </details>
+        <button>Run now</button>
+      </fieldset>
+    </form>
+    ${inProgress ? html`<p class="muted">Run now is off while a Run is in progress.</p>` : ''}`;
+}
+
+/** A select whose first choice, `unchosen`, leaves the option at its default. */
+function select(name: string, unchosen: string, choices: readonly string[]): Html {
+  return html`<select name="${name}">
+    <option value="">${unchosen}</option>
+    ${choices.map((choice) => html`<option>${choice}</option>`)}
+  </select>`;
+}
+
+export interface OverBudgetPage {
+  budget: BudgetCheck;
+  dailyBudgetUsd: number;
+  /** The Run now form's fields, posted again by "Run anyway". */
+  fields: Record<string, string>;
+}
+
+/** Run now's warning that the Daily budget left probably won't cover the Video, with a way to go ahead. */
+export function overBudgetPage({ budget, dailyBudgetUsd, fields }: OverBudgetPage): Html {
+  const { estimate, budgetLeftUsd } = budget;
+  const breakdown = estimate.images > 0 ? `${estimate.images} ${estimate.provider} images, plus text` : 'text only';
+  return layout(
+    'Over the Daily budget',
+    html`<section class="warning">
+      <h2>Over the Daily budget</h2>
+      <p>
+        A Video with these options is estimated to cost ${formatUsd(estimate.usd)} (${breakdown}), but only
+        ${formatUsd(budgetLeftUsd)} of today's ${formatUsd(dailyBudgetUsd)} Daily budget is left.
+      </p>
+      <p>
+        A Run that reaches the Daily budget stops there and fails over budget, unless IMAGE_FALLBACK=comfyui
+        lets it carry on with free images.
+      </p>
+      <form method="post" action="/actions/run-now">
+        ${Object.entries(fields).map(([name, value]) => html`<input type="hidden" name="${name}" value="${value}" />`)}
+        <button>Run anyway</button>
+      </form>
+      <p><a href="/">Back to the dashboard</a></p>
+    </section>`
   );
 }
 
@@ -86,10 +243,12 @@ export interface RunPage {
   cost: string;
   /** The Run's log, when one was kept. */
   log?: string;
+  /** The Run's progress so far, while this Daemon is running it. */
+  live?: LiveRun;
 }
 
-/** One Run: why it failed first, when it did, then what it made and its log. */
-export function runPage({ run, folder, cost, log }: RunPage): Html {
+/** One Run: why it failed first, when it did, then what it made and its log, followed live while it runs. */
+export function runPage({ run, folder, cost, log, live }: RunPage): Html {
   return layout(
     run.title ?? 'Run',
     html`
@@ -99,6 +258,7 @@ export function runPage({ run, folder, cost, log }: RunPage): Html {
         <dl>
           <dt>Outcome</dt>
           <dd>${outcome(run)}</dd>
+          ${run.outcome === 'in_progress' ? step(run, live) : ''}
           ${run.genre ? html`<dt>Genre</dt><dd>${genre(run.genre)}</dd>` : ''}
           ${run.durationSec !== undefined ? html`<dt>Length</dt><dd>${seconds(run.durationSec)}</dd>` : ''}
           <dt>Started</dt>
@@ -111,8 +271,13 @@ export function runPage({ run, folder, cost, log }: RunPage): Html {
       </section>
       <section>
         <h2>Run log</h2>
-        ${log !== undefined ? html`<pre>${log}</pre>` : html`<p>No run log was kept.</p>`}
+        ${run.outcome === 'in_progress'
+          ? liveLog(live)
+          : log !== undefined
+            ? html`<pre>${log}</pre>`
+            : html`<p>No run log was kept.</p>`}
       </section>
+      ${run.outcome === 'in_progress' ? liveScript(run.id) : ''}
     `
   );
 }
@@ -388,7 +553,16 @@ const CSS = `
   ul { margin: 0; padding-left: 1.25rem; }
   .alerts { border-color: var(--alert); }
   .alerts h2 { color: var(--alert); }
+  .warning { border-color: var(--amber); }
+  .warning h2 { color: var(--amber); }
   form { margin: 0.75rem 0 0; }
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+  summary { cursor: pointer; padding: 0.5rem 0; }
+  .options { margin-bottom: 0.75rem; }
+  .options label { display: block; margin-top: 0.5rem; }
+  .options select { display: block; width: 100%; min-height: 2.75rem; margin-top: 0.25rem; padding: 0 0.5rem; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  .options .check { display: flex; align-items: center; gap: 0.6rem; min-height: 2.75rem; margin-top: 0.25rem; }
+  .options .check input { width: 1.25rem; height: 1.25rem; margin: 0; }
   button { font: inherit; min-height: 2.75rem; padding: 0.5rem 1.25rem; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); cursor: pointer; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .up { color: var(--ok); }

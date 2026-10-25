@@ -115,6 +115,8 @@ function initSchema(database: DatabaseSync): void {
       outcome TEXT NOT NULL,
       -- The step of 7 reached; for a failed Run, the step it failed at.
       step INTEGER,
+      -- What that step said it was doing, such as "Writing the storyboard...".
+      step_message TEXT,
       error TEXT,
       -- Why a failed Run stopped, when it wasn't an error in a step: over budget, or interrupted.
       reason TEXT,
@@ -135,6 +137,7 @@ function initSchema(database: DatabaseSync): void {
   addColumnIfMissing(database, 'spend_log', 'run_id TEXT');
   database.exec('CREATE INDEX IF NOT EXISTS spend_log_run ON spend_log(run_id)');
   addColumnIfMissing(database, 'strategy_history', 'previous_rules_json TEXT');
+  addColumnIfMissing(database, 'runs', 'step_message TEXT');
 }
 
 /** Adds a column a table made before it existed lacks; `definition` is its name, then its type. */

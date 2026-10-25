@@ -1,21 +1,24 @@
 import { serve, type ServerType } from '@hono/node-server';
 import fs from 'fs';
 import { Hono } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import type { AddressInfo } from 'net';
 import path from 'path';
 import { openDatabase } from '../db/open.js';
-import { getRun, interruptRuns, listRuns, type RunRecord, type RunTrigger } from '../db/runs.js';
+import { getRun, interruptRuns, listRuns, runInProgress, type RunRecord, type RunTrigger } from '../db/runs.js';
 import { evolveHistory } from '../db/strategyHistory.js';
 import type { Config } from '../loadConfig.js';
 import type { Platform, PublishResult, VideoToPublish } from '../platforms.js';
-import { formatCost } from '../spend.js';
+import { checkDailyBudget, formatCost } from '../spend.js';
 import type { PipelineResult, Push, RunOptions, RunProgress, StrategyRules } from '../types.js';
 import { createAlerts, type AlertRule } from './alerts.js';
 import { every, type Clock } from './clock.js';
 import { startRun as beginRun, RunInProgressError, type StartedRun } from './generate.js';
+import { LiveProgress, RunFollower, type RunEvent } from './liveProgress.js';
 import { missingEnvKeysRule } from './missingEnvKeys.js';
 import {
   frontPage,
+  overBudgetPage,
   RESTART_NEEDS_PM2,
   restartingPage,
   runPage,
@@ -24,9 +27,12 @@ import {
   type StrategyPage,
 } from './pages.js';
 import { protect } from './protect.js';
+import { RUN_ANYWAY, runNowFields, runNowOptions, UnknownOptionError } from './runNow.js';
 import { nextDue, startSchedule, type ScheduledTask } from './schedule.js';
 
 const ALERT_CHECK_EVERY_MS = 60_000;
+/** How often a Run another process started, such as a command-line Run, is caught up with while a page watches. */
+const FOLLOW_EVERY_MS = 2_000;
 const HEARTBEAT_EVERY_MS = 5 * 60_000;
 /** How many Runs the front page lists. */
 const RECENT_RUNS = 5;
@@ -96,7 +102,26 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   const { clock } = adapters;
   const database = openDatabase(config.paths.dbFile);
   const startedAt = clock.now();
-  const deps = { ...adapters, config, database };
+  const live = new LiveProgress();
+  const follower = new RunFollower(database, live);
+  /** Catches up with a Run another process has in progress, such as a command-line Run. */
+  const followRuns = () => {
+    try {
+      follower.check();
+    } catch (err) {
+      console.warn(`[Daemon] Couldn't catch up with the Run in progress: ${(err as Error).message || String(err)}`);
+    }
+  };
+  let watchers = 0;
+  let stopFollowing = () => {};
+  /** Keeps following Runs other processes start, until the function it returns is called: while a page watches. */
+  const watchRuns = (): (() => void) => {
+    if (watchers++ === 0) stopFollowing = every(clock, FOLLOW_EVERY_MS, followRuns);
+    return () => {
+      if (--watchers === 0) stopFollowing();
+    };
+  };
+  const deps = { ...adapters, config, database, watcher: live };
   const alertRules = [missingEnvKeysRule(config.paths.root), ...(options.alertRules ?? [])];
   const alerts = createAlerts({ ...adapters, database, settings: config.alerts, rules: alertRules });
   const syncMetrics = () => adapters.analytics.syncMetrics();
@@ -118,14 +143,44 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   const app = new Hono();
   app.use(protect(config.dashboard.allowedHosts));
   app.get('/', (c) => {
+    followRuns();
     const now = clock.now();
     const nextUp = tasks.map((task) => ({ name: task.name, due: nextDue(task.expression, now) }));
     const canRestart = adapters.processControl.canRestart();
     const recentRuns = listRuns(database, RECENT_RUNS);
-    return c.html(frontPage({ now, startedAt, nextUp, alerts: alerts.active(), canRestart, recentRuns }));
+    const inProgress = runInProgress(database);
+    const current = inProgress && { run: inProgress, live: live.of(inProgress.id) };
+    const defaultProviders = { image: config.visuals.imageProvider, motion: config.visuals.motionProvider };
+    return c.html(
+      frontPage({ now, startedAt, nextUp, alerts: alerts.active(), canRestart, recentRuns, current, defaultProviders })
+    );
   });
+  // Which Run is in progress, then each step and log line of the Run in progress as it happens: at
+  // once for this Daemon's Runs, and at each check for a Run another process started. A page joining
+  // part-way through a Run first gets its step and its log so far.
+  app.get('/events', (c) =>
+    streamSSE(c, async (stream) => {
+      followRuns();
+      // Taken together, before anything is sent, so the catching up and what follows neither miss nor repeat a line.
+      const subscription = live.subscribe();
+      const catchUp: RunEvent[] = [
+        { event: 'run', data: { run: runInProgress(database)?.id ?? null } },
+        ...live.catchUp(),
+      ];
+      const unwatch = watchRuns();
+      stream.onAbort(() => subscription.close());
+      const send = (event: RunEvent) => stream.writeSSE({ event: event.event, data: JSON.stringify(event.data) });
+      try {
+        for (const event of catchUp) await send(event);
+        for (let event = await subscription.next(); event; event = await subscription.next()) await send(event);
+      } finally {
+        unwatch();
+      }
+    })
+  );
   app.get('/runs', (c) => c.html(runsPage(listRuns(database))));
   app.get('/runs/:id', (c) => {
+    followRuns();
     const run = getRun(database, c.req.param('id'));
     if (!run) return c.notFound();
     return c.html(
@@ -134,6 +189,7 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
         folder: run.folder && path.relative(config.paths.root, run.folder),
         cost: formatCost(run.costUsd, config.costs),
         log: readRunLog(run),
+        live: live.of(run.id),
       })
     );
   });
@@ -147,10 +203,26 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
       })
     );
   });
-  app.post('/actions/run-now', (c) => {
+  app.post('/actions/run-now', async (c) => {
+    const form = await c.req.parseBody();
+    let options: RunOptions;
+    try {
+      options = runNowOptions(form);
+    } catch (err) {
+      if (err instanceof UnknownOptionError) return c.text(err.message, 400);
+      throw err;
+    }
+    const inProgress = runInProgress(database);
+    if (inProgress) return c.text(new RunInProgressError(inProgress).message, 409);
+    // Run now only warns when the Daily budget probably won't cover the Video; going ahead is up to you.
+    const budget = checkDailyBudget(options, config, database);
+    if (!budget.fits && !form[RUN_ANYWAY]) {
+      const fields = { ...runNowFields(options), [RUN_ANYWAY]: 'on' };
+      return c.html(overBudgetPage({ budget, dailyBudgetUsd: config.costs.dailyBudgetUsd, fields }));
+    }
     let run: StartedRun;
     try {
-      run = startRun('run_now', {});
+      run = startRun('run_now', options);
     } catch (err) {
       if (err instanceof RunInProgressError) return c.text(err.message, 409);
       throw err;
@@ -181,10 +253,18 @@ export function createDaemon(config: Config, adapters: Adapters, options: Daemon
   /** Stops everything the Daemon started; stopping again waits for the first stop. */
   function stop(): Promise<void> {
     stopped ??= (async () => {
+      live.close();
+      stopFollowing();
       stopSchedule();
       stopAlertChecks();
       stopHeartbeat();
-      await new Promise((resolve) => (server ? server.close(resolve) : resolve(undefined)));
+      await new Promise((resolve) => {
+        if (!server) return resolve(undefined);
+        server.close(resolve);
+        // Browsers keep connections open between requests, and reconnect an open page's event
+        // stream; either would hold the close up.
+        if ('closeAllConnections' in server) server.closeAllConnections();
+      });
       await alerts.idle();
       database.close();
     })();
